@@ -91,29 +91,40 @@ const MAX_DEPTH = 3;
 const MAX_NODES = 500;
 
 const nameSchema = z.string().trim().min(1).max(120);
-/** A bare string is a node without topics. Children come from "topics", "topicos" or "itens". */
+// AI chats rename keys even when the prompt fixes them, so each field takes its usual names.
+const NAME_KEYS = ["name", "nome", "titulo", "title"];
+const DESCRIPTION_KEYS = ["description", "descricao"];
+const STEP_KEYS = ["steps", "modulos", "etapas", "modules"];
+const TOPIC_KEYS = ["topics", "topicos", "subtopicos", "subtopics", "itens", "items", "children"];
+const WRAPPER_KEYS = ["trilha", "roadmap"];
+
+type JsonObject = Record<string, unknown>;
+const isObject = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
+const firstOf = (o: JsonObject, keys: string[]) => keys.map((k) => o[k]).find((v) => v !== undefined && v !== null);
+
+/** A bare string is a node without topics. */
+const toNode = (v: unknown) => {
+  if (typeof v === "string") return { name: v, topics: [] };
+  if (!isObject(v)) return v;
+  return { name: firstOf(v, NAME_KEYS), topics: TOPIC_KEYS.flatMap((k) => (Array.isArray(v[k]) ? v[k] : [])) };
+};
+
+const toRoadmap = (v: unknown) => {
+  if (!isObject(v)) return v;
+  const wrapped = firstOf(v, WRAPPER_KEYS);
+  const root = isObject(wrapped) ? wrapped : v;
+  return { name: firstOf(root, NAME_KEYS), description: firstOf(root, DESCRIPTION_KEYS), steps: firstOf(root, STEP_KEYS) };
+};
+
 const nodeSchema: z.ZodTypeAny = z.lazy(() =>
-  z.preprocess(
-    (v) => (typeof v === "string" ? { name: v } : v),
-    z.object({
-      name: nameSchema,
-      topics: z.array(nodeSchema).optional(),
-      topicos: z.array(nodeSchema).optional(),
-      itens: z.array(nodeSchema).optional(),
-    }).transform(({ name, topics, topicos, itens }) => ({
-      name,
-      topics: [...(topics ?? []), ...(topicos ?? []), ...(itens ?? [])],
-    })),
-  ),
+  z.preprocess(toNode, z.object({ name: nameSchema, topics: z.array(nodeSchema) })),
 );
-/** Accepts "steps"/"description" or "modulos"/"descricao". Unknown keys such as "fonte" are ignored. */
-const roadmapSchema = z.object({
-  name: nameSchema.optional(),
-  description: z.string().trim().max(500).optional(),
-  descricao: z.string().trim().max(500).optional(),
-  steps: z.array(nodeSchema).optional(),
-  modulos: z.array(nodeSchema).optional(),
-});
+const NO_STEPS = 'inclua "steps" ou "modulos" com pelo menos um item.';
+const roadmapSchema = z.preprocess(toRoadmap, z.object({
+  name: nameSchema.default("Trilha importada"),
+  description: z.string().trim().max(500).default(""),
+  steps: z.array(nodeSchema, { required_error: NO_STEPS }).min(1, NO_STEPS),
+}));
 
 const depthOf = (nodes: RoadmapNode[]): number =>
   nodes.length === 0 ? 0 : 1 + Math.max(...nodes.map((n) => depthOf(n.topics)));
@@ -131,14 +142,7 @@ export function parseRoadmapJson(text: string): RoadmapResult {
       const issue = parsed.error.issues[0];
       return { ok: false, error: `Campo inválido em "${issue.path.join(".") || "raiz"}": ${issue.message}` };
     }
-    const data = parsed.data;
-    const steps = data.steps?.length ? data.steps : (data.modulos ?? []);
-    if (steps.length === 0) return { ok: false, error: 'Inclua "steps" ou "modulos" com pelo menos um item.' };
-    const roadmap: Roadmap = {
-      name: data.name ?? "Trilha importada",
-      description: data.description ?? data.descricao ?? "",
-      steps,
-    };
+    const roadmap = parsed.data as Roadmap;
     if (depthOf(roadmap.steps) > MAX_DEPTH) return { ok: false, error: `Use no máximo ${MAX_DEPTH} níveis de tópicos.` };
     if (countOf(roadmap.steps) > MAX_NODES) return { ok: false, error: `Use no máximo ${MAX_NODES} itens.` };
     return { ok: true, roadmap };
