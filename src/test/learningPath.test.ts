@@ -97,6 +97,35 @@ describe("parseRoadmapJson", () => {
     });
   });
 
+  it("accepts the modulos, topicos and itens format", () => {
+    const result = parseRoadmapJson(JSON.stringify({
+      name: "SQL",
+      descricao: "Desc",
+      fonte: "roadmap.sh",
+      modulos: [
+        { name: "Basics", topicos: ["Keywords", "Types"] },
+        { name: "DML", topicos: [{ name: "Statements", itens: ["SELECT", "INSERT"] }] },
+      ],
+    }));
+    const leaf = (name: string) => ({ name, topics: [] });
+    expect(result).toEqual({
+      ok: true,
+      roadmap: {
+        name: "SQL",
+        description: "Desc",
+        steps: [
+          { name: "Basics", topics: [leaf("Keywords"), leaf("Types")] },
+          { name: "DML", topics: [{ name: "Statements", topics: [leaf("SELECT"), leaf("INSERT")] }] },
+        ],
+      },
+    });
+  });
+
+  it("names the roadmap when the JSON has no name", () => {
+    const result = parseRoadmapJson(JSON.stringify({ steps: [{ name: "a" }] }));
+    expect(result.ok && result.roadmap.name).toBe("Trilha importada");
+  });
+
   it("ignores code fences and text around the JSON", () => {
     expect(parseRoadmapJson("Aqui está:\n```json\n" + JSON.stringify(valid) + "\n```\nPronto!").ok).toBe(true);
   });
