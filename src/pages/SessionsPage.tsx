@@ -26,10 +26,11 @@ import EmptyState from "@/components/page/EmptyState";
 import RowActions from "@/components/page/RowActions";
 import DayGroupedList from "@/components/page/DayGroupedList";
 import { ColorDot } from "@/components/page/bits";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, minutesToTime, timeToMinutes } from "@/lib/format";
 import { Checkbox } from "@/components/ui/checkbox";
 import { parseNotes, serializeNotes } from "@/lib/sessionNotes";
 import { useCourseModules, CourseModule } from "@/hooks/useCourseModules";
+import { useLearningPaths } from "@/hooks/useLearningPaths";
 
 interface CourseOption {
   id: string;
@@ -57,22 +58,11 @@ const blankAllocation = (): SubjectAllocation => ({
   studied: "",
 });
 
-function minutesToTime(totalMinutes: number): string {
-  const m = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
-  const h = Math.floor(m / 60);
-  const min = Math.round(m % 60);
-  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-}
-
-function timeToMinutes(t: string): number {
-  const [h, m] = t.split(":").map(Number);
-  return h * 60 + m;
-}
-
 export default function SessionsPage() {
   const { sessions, subjects, addSession, updateSession, deleteSession } = useStudy();
   const { user } = useAuth();
   const { modules, modulesFor, updateModule } = useCourseModules();
+  const { paths } = useLearningPaths();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, getDescendantIds, addCategory, updateCategory, deleteCategory } = useCategories("session");
   const [editing, setEditing] = useState<StudySession | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -86,6 +76,11 @@ export default function SessionsPage() {
   }, [user]);
 
   useEffect(() => { fetchCourses(); }, [fetchCourses]);
+
+  const stepLabels = useMemo(
+    () => new Map(paths.flatMap((p) => p.steps.map((st) => [st.id, `${p.name} › ${st.name}`] as const))),
+    [paths],
+  );
 
   const sorted = [...sessions].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
 
@@ -132,6 +127,7 @@ export default function SessionsPage() {
           id: editing.id,
           subjectId: alloc.subjectId,
           courseId: alloc.courseId,
+          stepId: editing.stepId,
           date: base.date,
           startTime: base.startTime,
           endTime,
@@ -233,6 +229,7 @@ export default function SessionsPage() {
                 const course = courses.find((c) => c.id === s.courseId);
                 const cats = getCategoriesForItem(s.id, "session");
                 const n = parseNotes(s.notes);
+                const stepLabel = s.stepId ? stepLabels.get(s.stepId) : undefined;
                 const label = `sessão de ${sub?.name || "matéria removida"} às ${s.startTime}`;
                 return (
                   <div className="flex items-start gap-4 px-4 py-3.5 sm:px-5">
@@ -251,8 +248,14 @@ export default function SessionsPage() {
                       <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
                         {s.startTime}–{s.endTime}
                       </p>
-                      {(n.module || n.courseSessions.length > 0 || n.topics) && (
+                      {(stepLabel || n.module || n.courseSessions.length > 0 || n.topics) && (
                         <dl className="mt-2 space-y-1.5 text-xs">
+                          {stepLabel && (
+                            <div>
+                              <dt className="inline font-medium text-foreground">Trilha: </dt>
+                              <dd className="inline text-muted-foreground">{stepLabel}</dd>
+                            </div>
+                          )}
                           {n.module && (
                             <div>
                               <dt className="inline font-medium text-foreground">Módulo concluído: </dt>

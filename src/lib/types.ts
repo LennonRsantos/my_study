@@ -9,6 +9,8 @@ export interface StudySession {
   id: string;
   subjectId: string;
   courseId?: string | null;
+  /** Learning path step this session covered. */
+  stepId?: string | null;
   date: string; // YYYY-MM-DD
   startTime: string; // HH:mm
   endTime: string; // HH:mm

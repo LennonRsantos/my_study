@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { Roadmap, leafSteps, roadmapRows, stepHours } from "@/lib/learningPath";
 
 export type StepStatus = "not_started" | "in_progress" | "completed";
 
 export interface LearningPathStep {
   id: string;
   pathId: string;
+  parentId: string | null;
   name: string;
   icon: string | null;
   status: StepStatus;
@@ -15,6 +17,10 @@ export interface LearningPathStep {
   position: number;
   completedAt: string | null;
   subjectId: string | null;
+  moduleId: string | null;
+  studyNote: string;
+  /** Hours or the linked module keep this step completed, so it cannot be unchecked. */
+  autoDone: boolean;
 }
 
 export interface LearningPath {
@@ -22,6 +28,7 @@ export interface LearningPath {
   name: string;
   description: string;
   estimatedHours: number;
+  courseId: string | null;
   steps: LearningPathStep[];
   createdAt: string;
 }
@@ -54,23 +61,47 @@ export function useLearningPaths() {
         stepsData = data || [];
       }
 
-      // Fetch actual hours from study_sessions for linked subjects
-      const subjectIds = stepsData
-        .map((s: any) => s.subject_id)
-        .filter((id: string | null) => id !== null) as string[];
-      
-      let hoursMap: Record<string, number> = {};
-      if (subjectIds.length > 0) {
-        const uniqueSubjectIds = [...new Set(subjectIds)];
-        const { data: sessionsData } = await supabase
-          .from("study_sessions")
-          .select("subject_id, hours")
-          .eq("user_id", user.id)
-          .in("subject_id", uniqueSubjectIds);
-        
-        (sessionsData || []).forEach((s: any) => {
-          hoursMap[s.subject_id] = (hoursMap[s.subject_id] || 0) + Number(s.hours);
-        });
+      const steps: LearningPathStep[] = stepsData.map((s: any) => ({
+        id: s.id,
+        pathId: s.path_id,
+        parentId: s.parent_id ?? null,
+        name: s.name,
+        icon: s.icon,
+        status: s.status as StepStatus,
+        estimatedHours: Number(s.estimated_hours),
+        actualHours: 0,
+        position: s.position,
+        completedAt: s.completed_at,
+        subjectId: s.subject_id,
+        moduleId: s.module_id ?? null,
+        studyNote: s.study_note ?? "",
+        autoDone: false,
+      }));
+
+      // Sessions linked to a step, plus sessions of the subjects steps follow
+      const subjectIds = [...new Set(steps.flatMap((s) => (s.subjectId ? [s.subjectId] : [])))];
+      const moduleIds = [...new Set(steps.flatMap((s) => (s.moduleId ? [s.moduleId] : [])))];
+      const [{ data: sessionsData }, { data: doneModules }] = await Promise.all([
+        steps.length > 0
+          ? supabase
+              .from("study_sessions")
+              .select("subject_id, step_id, hours")
+              .eq("user_id", user.id)
+              .or(subjectIds.length > 0 ? `step_id.not.is.null,subject_id.in.(${subjectIds.join(",")})` : "step_id.not.is.null")
+          : Promise.resolve({ data: [] }),
+        moduleIds.length > 0
+          ? supabase.from("course_modules").select("id").in("id", moduleIds).eq("completed", true)
+          : Promise.resolve({ data: [] }),
+      ]);
+      const hours = stepHours(steps, sessionsData || []);
+      const doneModuleIds = new Set((doneModules || []).map((m: any) => m.id));
+      const leafIds = new Set(leafSteps(steps).map((s) => s.id));
+      for (const step of steps) {
+        step.actualHours = hours.get(step.id) || 0;
+        step.autoDone = leafIds.has(step.id) && (
+          (step.estimatedHours > 0 && step.actualHours >= step.estimatedHours) ||
+          (!!step.moduleId && doneModuleIds.has(step.moduleId))
+        );
       }
 
       const result: LearningPath[] = (pathsData || []).map((p: any) => ({
@@ -78,41 +109,23 @@ export function useLearningPaths() {
         name: p.name,
         description: p.description || "",
         estimatedHours: Number(p.estimated_hours),
+        courseId: p.course_id ?? null,
         createdAt: p.created_at,
-        steps: stepsData
-          .filter((s: any) => s.path_id === p.id)
-          .map((s: any) => ({
-            id: s.id,
-            pathId: s.path_id,
-            name: s.name,
-            icon: s.icon,
-            status: s.status as StepStatus,
-            estimatedHours: Number(s.estimated_hours),
-            actualHours: s.subject_id ? (hoursMap[s.subject_id] || 0) : 0,
-            position: s.position,
-            completedAt: s.completed_at,
-            subjectId: s.subject_id,
-          })),
+        steps: steps.filter((s) => s.pathId === p.id),
       }));
 
-      // Auto-complete steps where actualHours >= estimatedHours
+      // Auto-complete steps that reached their hours or whose module is completed
       const autoCompletePromises: Promise<any>[] = [];
-      for (const path of result) {
-        for (const step of path.steps) {
-          if (
-            step.status !== "completed" &&
-            step.estimatedHours > 0 &&
-            step.actualHours >= step.estimatedHours
-          ) {
-            step.status = "completed";
-            step.completedAt = new Date().toISOString();
-            autoCompletePromises.push((async () => {
-              await supabase.from("learning_path_steps").update({
-                status: "completed" as const,
-                completed_at: step.completedAt,
-              }).eq("id", step.id);
-            })());
-          }
+      for (const step of steps) {
+        if (step.autoDone && step.status !== "completed") {
+          step.status = "completed";
+          step.completedAt = new Date().toISOString();
+          autoCompletePromises.push((async () => {
+            await supabase.from("learning_path_steps").update({
+              status: "completed" as const,
+              completed_at: step.completedAt,
+            }).eq("id", step.id);
+          })());
         }
       }
       if (autoCompletePromises.length > 0) {
@@ -129,12 +142,12 @@ export function useLearningPaths() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const createPath = async (name: string, description: string) => {
+  const createPath = async (name: string, description: string, courseId: string | null = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
     const { data, error } = await supabase
       .from("learning_paths")
-      .insert({ name, description, user_id: user.id })
+      .insert({ name, description, user_id: user.id, course_id: courseId })
       .select()
       .single();
     if (error) { toast({ title: "Erro ao criar trilha", variant: "destructive" }); return null; }
@@ -142,10 +155,33 @@ export function useLearningPaths() {
     return data.id;
   };
 
-  const updatePath = async (id: string, name: string, description: string) => {
-    const { error } = await supabase.from("learning_paths").update({ name, description, updated_at: new Date().toISOString() }).eq("id", id);
+  const updatePath = async (id: string, name: string, description: string, courseId: string | null) => {
+    const { error } = await supabase.from("learning_paths").update({ name, description, course_id: courseId, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { toast({ title: "Erro ao atualizar trilha", variant: "destructive" }); return; }
+    // Modules belong to the old course
+    if (paths.find(p => p.id === id)?.courseId !== courseId) {
+      await supabase.from("learning_path_steps").update({ module_id: null }).eq("path_id", id);
+    }
     await refresh();
+  };
+
+  /** Creates the path and its whole tree, or nothing: a failed tree insert removes the path again. */
+  const importPath = async (roadmap: Roadmap, courseId: string | null) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    const id = crypto.randomUUID();
+    const { error } = await supabase
+      .from("learning_paths")
+      .insert({ id, name: roadmap.name, description: roadmap.description, user_id: user.id, course_id: courseId });
+    if (error) { toast({ title: "Erro ao criar trilha", variant: "destructive" }); return null; }
+    const { error: stepsError } = await supabase.from("learning_path_steps").insert(roadmapRows(roadmap.steps, id));
+    if (stepsError) {
+      await supabase.from("learning_paths").delete().eq("id", id);
+      toast({ title: "Erro ao criar etapas da trilha", variant: "destructive" });
+      return null;
+    }
+    await refresh();
+    return id;
   };
 
   const deletePath = async (id: string) => {
@@ -154,11 +190,15 @@ export function useLearningPaths() {
     await refresh();
   };
 
-  const addStep = async (pathId: string, name: string, icon: string | null, estimatedHours: number, subjectId: string | null = null) => {
+  const addStep = async (
+    pathId: string, name: string, icon: string | null, estimatedHours: number,
+    subjectId: string | null = null, parentId: string | null = null, moduleId: string | null = null,
+  ) => {
     const path = paths.find(p => p.id === pathId);
-    const position = path ? path.steps.length : 0;
+    const siblings = (path?.steps || []).filter(s => s.parentId === parentId);
+    const position = Math.max(-1, ...siblings.map(s => s.position)) + 1;
     const insertData: any = {
-      path_id: pathId, name, icon, estimated_hours: estimatedHours, position,
+      path_id: pathId, name, icon, estimated_hours: estimatedHours, position, parent_id: parentId, module_id: moduleId,
     };
     if (subjectId) insertData.subject_id = subjectId;
     const { error } = await supabase.from("learning_path_steps").insert(insertData);
@@ -168,17 +208,29 @@ export function useLearningPaths() {
     await refresh();
   };
 
-  const updateStep = async (stepId: string, updates: Partial<{ name: string; icon: string | null; estimatedHours: number; status: StepStatus; subjectId: string | null }>) => {
+  const updateStep = async (stepId: string, updates: Partial<{ name: string; icon: string | null; estimatedHours: number; status: StepStatus; subjectId: string | null; moduleId: string | null; studyNote: string }>) => {
     const dbUpdates: any = { updated_at: new Date().toISOString() };
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.icon !== undefined) dbUpdates.icon = updates.icon;
     if (updates.estimatedHours !== undefined) dbUpdates.estimated_hours = updates.estimatedHours;
     if (updates.subjectId !== undefined) dbUpdates.subject_id = updates.subjectId;
+    if (updates.moduleId !== undefined) dbUpdates.module_id = updates.moduleId;
+    if (updates.studyNote !== undefined) dbUpdates.study_note = updates.studyNote;
     if (updates.status !== undefined) {
       dbUpdates.status = updates.status;
       dbUpdates.completed_at = updates.status === "completed" ? new Date().toISOString() : null;
     }
     const { error } = await supabase.from("learning_path_steps").update(dbUpdates).eq("id", stepId);
+    if (error) { toast({ title: "Erro ao atualizar etapa", variant: "destructive" }); return; }
+    await refresh();
+  };
+
+  const setStepsStatus = async (stepIds: string[], status: StepStatus) => {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from("learning_path_steps")
+      .update({ status, completed_at: status === "completed" ? now : null, updated_at: now })
+      .in("id", stepIds);
     if (error) { toast({ title: "Erro ao atualizar etapa", variant: "destructive" }); return; }
     await refresh();
   };
@@ -197,5 +249,5 @@ export function useLearningPaths() {
     await refresh();
   };
 
-  return { paths, loading, createPath, updatePath, deletePath, addStep, updateStep, deleteStep, reorderSteps, refresh };
+  return { paths, loading, createPath, importPath, updatePath, deletePath, addStep, updateStep, setStepsStatus, deleteStep, reorderSteps, refresh };
 }

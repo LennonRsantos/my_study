@@ -34,6 +34,19 @@ export function formatDayShort(date: Date): string {
   return format(date, "EEE, d MMM", { locale: ptBR });
 }
 
+/** 1470 -> "00:30": wraps past midnight */
+export function minutesToTime(totalMinutes: number): string {
+  const m = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  const h = Math.floor(m / 60);
+  const min = Math.round(m % 60);
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+export function timeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
 export function greeting(date: Date): string {
   const h = date.getHours();
   if (h < 12) return "Bom dia";

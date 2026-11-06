@@ -580,10 +580,13 @@ export type Database = {
           estimated_hours: number | null
           icon: string | null
           id: string
+          module_id: string | null
           name: string
+          parent_id: string | null
           path_id: string
           position: number
           status: Database["public"]["Enums"]["step_status"]
+          study_note: string
           subject_id: string | null
           updated_at: string
         }
@@ -593,10 +596,13 @@ export type Database = {
           estimated_hours?: number | null
           icon?: string | null
           id?: string
+          module_id?: string | null
           name: string
+          parent_id?: string | null
           path_id: string
           position?: number
           status?: Database["public"]["Enums"]["step_status"]
+          study_note?: string
           subject_id?: string | null
           updated_at?: string
         }
@@ -606,14 +612,31 @@ export type Database = {
           estimated_hours?: number | null
           icon?: string | null
           id?: string
+          module_id?: string | null
           name?: string
+          parent_id?: string | null
           path_id?: string
           position?: number
           status?: Database["public"]["Enums"]["step_status"]
+          study_note?: string
           subject_id?: string | null
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "learning_path_steps_module_id_fkey"
+            columns: ["module_id"]
+            isOneToOne: false
+            referencedRelation: "course_modules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "learning_path_steps_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "learning_path_steps"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "learning_path_steps_path_id_fkey"
             columns: ["path_id"]
@@ -632,6 +655,7 @@ export type Database = {
       }
       learning_paths: {
         Row: {
+          course_id: string | null
           created_at: string
           description: string | null
           estimated_hours: number | null
@@ -641,6 +665,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          course_id?: string | null
           created_at?: string
           description?: string | null
           estimated_hours?: number | null
@@ -650,6 +675,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          course_id?: string | null
           created_at?: string
           description?: string | null
           estimated_hours?: number | null
@@ -658,7 +684,15 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "learning_paths_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       plan_blocks: {
         Row: {
@@ -844,6 +878,7 @@ export type Database = {
           id: string
           notes: string | null
           start_time: string
+          step_id: string | null
           subject_id: string
           user_id: string | null
         }
@@ -856,6 +891,7 @@ export type Database = {
           id?: string
           notes?: string | null
           start_time: string
+          step_id?: string | null
           subject_id: string
           user_id?: string | null
         }
@@ -868,10 +904,18 @@ export type Database = {
           id?: string
           notes?: string | null
           start_time?: string
+          step_id?: string | null
           subject_id?: string
           user_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "study_sessions_step_id_fkey"
+            columns: ["step_id"]
+            isOneToOne: false
+            referencedRelation: "learning_path_steps"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "study_sessions_course_id_fkey"
             columns: ["course_id"]

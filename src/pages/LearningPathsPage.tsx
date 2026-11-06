@@ -1,13 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import AppLayout from "@/components/AppLayout";
-import { useLearningPaths, LearningPath, LearningPathStep, StepStatus } from "@/hooks/useLearningPaths";
+import { useLearningPaths, LearningPath } from "@/hooks/useLearningPaths";
+import { useCourses, Course } from "@/hooks/useCourses";
+import { useCourseModules, CourseModule } from "@/hooks/useCourseModules";
+import { useStudy } from "@/contexts/StudyContext";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Plus, ArrowUp, Check } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatHours } from "@/lib/format";
 import PageHeader from "@/components/page/PageHeader";
@@ -15,55 +17,15 @@ import EmptyState from "@/components/page/EmptyState";
 import RowActions from "@/components/page/RowActions";
 import StatRow from "@/components/page/StatRow";
 import { ColorDot, LoadingState } from "@/components/page/bits";
-import { getDeviconUrl, getDeviconUrlFallback, Subject } from "@/lib/types";
+import { getDeviconUrl, Subject } from "@/lib/types";
 import { toast } from "@/hooks/use-toast";
 import { Label } from "@/components/ui/label";
 import SearchableIconPicker from "@/components/SearchableIconPicker";
-import { supabase } from "@/integrations/supabase/client";
-import { getSubjects } from "@/lib/store";
-
-const STATUS_LABELS: Record<StepStatus, string> = {
-  not_started: "Não iniciado",
-  in_progress: "Em andamento",
-  completed: "Concluído",
-};
-
-const STATUS_BADGE: Record<StepStatus, string> = {
-  not_started: "bg-muted text-muted-foreground hover:bg-muted",
-  in_progress: "bg-primary/15 text-foreground hover:bg-primary/15",
-  completed: "bg-success/15 text-foreground hover:bg-success/15",
-};
-
-/** Timeline marker: the step's devicon, or its number, ringed by status. */
-function StepMarker({ icon, status, index }: { icon: string | null; status: StepStatus; index: number }) {
-  const [useFallback, setUseFallback] = useState(false);
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 bg-card font-display text-sm font-semibold tabular-nums",
-        status === "completed" && "border-success",
-        status === "in_progress" && "border-primary",
-        status === "not_started" && "border-border text-muted-foreground",
-      )}
-    >
-      {icon ? (
-        <img
-          src={useFallback ? getDeviconUrlFallback(icon) : getDeviconUrl(icon)}
-          alt=""
-          width={22}
-          height={22}
-          className="h-[22px] w-[22px]"
-          onError={() => { if (!useFallback) setUseFallback(true); }}
-        />
-      ) : status === "completed" ? (
-        <Check className="h-5 w-5 text-success" />
-      ) : (
-        index + 1
-      )}
-    </span>
-  );
-}
+import CourseSelect from "@/components/paths/CourseSelect";
+import ImportRoadmapDialog from "@/components/paths/ImportRoadmapDialog";
+import RoadmapView from "@/components/paths/RoadmapView";
+import StepPanel from "@/components/paths/StepPanel";
+import { Roadmap, StepNode, buildTree, effectiveStatus, flattenNode, leafSteps } from "@/lib/learningPath";
 
 // --- Step Form (shared between Add and Edit) ---
 interface StepFormProps {
@@ -76,9 +38,12 @@ interface StepFormProps {
   subjectId: string;
   setSubjectId: (v: string) => void;
   subjects: Subject[];
+  moduleId: string;
+  setModuleId: (v: string) => void;
+  modules: CourseModule[];
 }
 
-function StepForm({ name, setName, icon, setIcon, hours, setHours, subjectId, setSubjectId, subjects }: StepFormProps) {
+function StepForm({ name, setName, icon, setIcon, hours, setHours, subjectId, setSubjectId, subjects, moduleId, setModuleId, modules }: StepFormProps) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -113,118 +78,156 @@ function StepForm({ name, setName, icon, setIcon, hours, setHours, subjectId, se
           As horas das sessões desta matéria passam a contar para a etapa.
         </p>
       </div>
+      {modules.length > 0 && (
+        <div className="space-y-2">
+          <Label htmlFor="step-module">Módulo do curso <span className="font-normal text-muted-foreground">(opcional)</span></Label>
+          <Select value={moduleId} onValueChange={setModuleId}>
+            <SelectTrigger id="step-module"><SelectValue placeholder="Nenhum módulo" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Nenhum</SelectItem>
+              {modules.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Concluir o módulo conclui esta etapa.</p>
+        </div>
+      )}
     </div>
   );
 }
 
+const pickedId = (value: string) => (value && value !== "none" ? value : null);
+
 export default function LearningPathsPage() {
-  const { paths, loading, createPath, updatePath, deletePath, addStep, updateStep, deleteStep, reorderSteps } = useLearningPaths();
+  const {
+    paths, loading, createPath, importPath, updatePath, deletePath,
+    addStep, updateStep, setStepsStatus, deleteStep, reorderSteps, refresh,
+  } = useLearningPaths();
+  const { courses } = useCourses();
+  const { modulesFor } = useCourseModules();
+  const { subjects, refresh: refreshStudy } = useStudy();
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [showCreatePath, setShowCreatePath] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showAddStep, setShowAddStep] = useState(false);
+  const [addParent, setAddParent] = useState<StepNode | null>(null);
   const [editingPath, setEditingPath] = useState<LearningPath | null>(null);
-  const [editingStep, setEditingStep] = useState<LearningPathStep | null>(null);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [editingStep, setEditingStep] = useState<StepNode | null>(null);
+  const [panelStepId, setPanelStepId] = useState<string | null>(null);
 
   // Form state
   const [pathName, setPathName] = useState("");
   const [pathDesc, setPathDesc] = useState("");
+  const [pathCourseId, setPathCourseId] = useState<string | null>(null);
   const [stepName, setStepName] = useState("");
   const [stepIcon, setStepIcon] = useState<string>("");
   const [stepHours, setStepHours] = useState("");
   const [stepSubjectId, setStepSubjectId] = useState<string>("");
+  const [stepModuleId, setStepModuleId] = useState<string>("");
 
   const selectedPath = paths.find(p => p.id === selectedPathId);
+  const tree = useMemo(() => buildTree(selectedPath?.steps ?? []), [selectedPath]);
+  const panelNode = tree.flatMap(flattenNode).find(n => n.id === panelStepId);
 
-  // Load subjects
-  useEffect(() => {
-    getSubjects().then(setSubjects).catch(() => {});
-  }, []);
+  const resetPathForm = () => {
+    setPathName(""); setPathDesc(""); setPathCourseId(null);
+  };
 
   const resetStepForm = () => {
-    setStepName(""); setStepIcon(""); setStepHours(""); setStepSubjectId("");
+    setStepName(""); setStepIcon(""); setStepHours(""); setStepSubjectId(""); setStepModuleId("");
   };
 
   const handleCreatePath = async () => {
     if (!pathName.trim()) return;
-    await createPath(pathName.trim(), pathDesc.trim());
-    setPathName(""); setPathDesc(""); setShowCreatePath(false);
+    await createPath(pathName.trim(), pathDesc.trim(), pathCourseId);
+    resetPathForm(); setShowCreatePath(false);
     toast({ title: "Trilha criada" });
   };
 
   const handleEditPath = async () => {
     if (!editingPath || !pathName.trim()) return;
-    await updatePath(editingPath.id, pathName.trim(), pathDesc.trim());
-    setEditingPath(null); setPathName(""); setPathDesc("");
+    await updatePath(editingPath.id, pathName.trim(), pathDesc.trim(), pathCourseId);
+    setEditingPath(null); resetPathForm();
     toast({ title: "Trilha salva" });
+  };
+
+  const handleImport = async (roadmap: Roadmap, courseId: string | null) => {
+    const id = await importPath(roadmap, courseId);
+    if (id) { setSelectedPathId(id); toast({ title: "Trilha criada" }); }
+    return id;
   };
 
   const handleAddStep = async () => {
     if (!selectedPathId || !stepName.trim()) return;
     const hours = parseFloat(stepHours) || 0;
-    const subId = stepSubjectId && stepSubjectId !== "none" ? stepSubjectId : null;
-    await addStep(selectedPathId, stepName.trim(), stepIcon || null, hours, subId);
-    resetStepForm(); setShowAddStep(false);
+    await addStep(selectedPathId, stepName.trim(), stepIcon || null, hours, pickedId(stepSubjectId), addParent?.id ?? null, pickedId(stepModuleId));
+    resetStepForm(); setShowAddStep(false); setAddParent(null);
     toast({ title: "Etapa adicionada" });
   };
 
   const handleEditStep = async () => {
     if (!editingStep || !stepName.trim()) return;
     const hours = parseFloat(stepHours) || 0;
-    const subId = stepSubjectId && stepSubjectId !== "none" ? stepSubjectId : null;
     await updateStep(editingStep.id, {
       name: stepName.trim(),
       icon: stepIcon || null,
       estimatedHours: hours,
-      subjectId: subId,
+      subjectId: pickedId(stepSubjectId),
+      moduleId: pickedId(stepModuleId),
     });
     setEditingStep(null); resetStepForm();
     toast({ title: "Etapa salva" });
   };
 
-  const openEditStep = (step: LearningPathStep) => {
+  const openEditStep = (step: StepNode) => {
     setStepName(step.name);
     setStepIcon(step.icon || "");
     setStepHours(step.estimatedHours > 0 ? String(step.estimatedHours) : "");
     setStepSubjectId(step.subjectId || "");
+    setStepModuleId(step.moduleId || "");
+    setPanelStepId(null);
     setEditingStep(step);
   };
 
-  const handleStepStatusChange = async (stepId: string, newStatus: StepStatus) => {
-    await updateStep(stepId, { status: newStatus });
+  /** Checks or unchecks the node and everything under it, except steps hours or a module keep completed. */
+  const setNodeCompleted = async (node: StepNode, completed: boolean) => {
+    const ids = flattenNode(node).filter(n => !n.autoDone).map(n => n.id);
+    if (ids.length > 0) await setStepsStatus(ids, completed ? "completed" : "not_started");
+  };
+
+  const handleDeleteStep = async (node: StepNode) => {
+    setPanelStepId(null);
+    await deleteStep(node.id);
+    refreshStudy(); // the database cleared step_id on the sessions of the deleted steps
   };
 
   const getPathProgress = (path: LearningPath) => {
-    if (path.steps.length === 0) return 0;
-    const completed = path.steps.filter(s => s.status === "completed").length;
-    return Math.round((completed / path.steps.length) * 100);
+    const leaves = leafSteps(path.steps);
+    if (leaves.length === 0) return 0;
+    return Math.round((leaves.filter(s => s.status === "completed").length / leaves.length) * 100);
   };
 
+  // Root steps already include their topics' hours
   const getActualHours = (path: LearningPath) => {
-    return path.steps.reduce((sum, s) => sum + s.actualHours, 0);
+    return path.steps.filter(s => !s.parentId).reduce((sum, s) => sum + s.actualHours, 0);
   };
 
   const getTotalHours = (path: LearningPath) => {
-    return path.steps.reduce((sum, s) => sum + s.estimatedHours, 0);
+    return leafSteps(path.steps).reduce((sum, s) => sum + s.estimatedHours, 0);
   };
 
-  const moveStep = async (pathId: string, stepId: string, direction: "up" | "down") => {
-    const path = paths.find(p => p.id === pathId);
-    if (!path) return;
-    const ids = path.steps.map(s => s.id);
-    const idx = ids.indexOf(stepId);
-    if (direction === "up" && idx > 0) {
-      [ids[idx], ids[idx - 1]] = [ids[idx - 1], ids[idx]];
-    } else if (direction === "down" && idx < ids.length - 1) {
-      [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-    }
-    await reorderSteps(pathId, ids);
+  const siblingsOf = (node: StepNode) => selectedPath?.steps
+    .filter(s => s.parentId === node.parentId)
+    .sort((a, b) => a.position - b.position) ?? [];
+
+  const moveStepUp = async (node: StepNode) => {
+    const ids = siblingsOf(node).map(s => s.id);
+    const idx = ids.indexOf(node.id);
+    if (idx <= 0) return;
+    [ids[idx], ids[idx - 1]] = [ids[idx - 1], ids[idx]];
+    await reorderSteps(node.pathId, ids);
   };
 
-  const getSubjectName = (subjectId: string | null) => {
-    if (!subjectId) return null;
-    return subjects.find(s => s.id === subjectId)?.name || null;
-  };
+  const courseOf = (path: LearningPath) => courses.find(c => c.id === path.courseId);
 
   if (loading) return <AppLayout><LoadingState /></AppLayout>;
 
@@ -233,7 +236,20 @@ export default function LearningPathsPage() {
     const progress = getPathProgress(selectedPath);
     const actualH = getActualHours(selectedPath);
     const totalH = getTotalHours(selectedPath);
-    const count = (st: StepStatus) => selectedPath.steps.filter(s => s.status === st).length;
+    const leaves = leafSteps(selectedPath.steps);
+    const count = (st: LearningPath["steps"][number]["status"]) => leaves.filter(s => s.status === st).length;
+    const course = courseOf(selectedPath);
+    const modules = selectedPath.courseId ? modulesFor(selectedPath.courseId) : [];
+    const stepFormProps = {
+      name: stepName, setName: setStepName,
+      icon: stepIcon, setIcon: setStepIcon,
+      hours: stepHours, setHours: setStepHours,
+      subjectId: stepSubjectId, setSubjectId: setStepSubjectId,
+      subjects,
+      moduleId: stepModuleId, setModuleId: setStepModuleId,
+      modules,
+    };
+    const closeAddStep = () => { setShowAddStep(false); setAddParent(null); resetStepForm(); };
 
     return (
       <AppLayout>
@@ -241,138 +257,82 @@ export default function LearningPathsPage() {
           back={{ onClick: () => setSelectedPathId(null), label: "Trilhas" }}
           title={selectedPath.name}
           description={selectedPath.description || undefined}
-          actions={
-            <Dialog open={showAddStep} onOpenChange={(o) => { setShowAddStep(o); if (!o) resetStepForm(); }}>
-              <DialogTrigger asChild>
-                <Button size="sm"><Plus className="w-4 h-4" />Nova etapa</Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader><DialogTitle>Nova etapa</DialogTitle></DialogHeader>
-                <StepForm
-                  name={stepName} setName={setStepName}
-                  icon={stepIcon} setIcon={setStepIcon}
-                  hours={stepHours} setHours={setStepHours}
-                  subjectId={stepSubjectId} setSubjectId={setStepSubjectId}
-                  subjects={subjects}
-                />
-                <DialogFooter>
-                  <Button onClick={handleAddStep} disabled={!stepName.trim()}>Adicionar etapa</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          }
+          actions={<Button size="sm" onClick={() => setShowAddStep(true)}><Plus className="w-4 h-4" />Nova etapa</Button>}
         />
 
         <div className="space-y-6">
+          {course && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <ColorDot color={course.color} />
+              Curso: {course.name}
+            </p>
+          )}
+
           <StatRow
             stats={[
-              { label: "Concluído", value: `${progress}%`, sub: `${count("completed")} de ${selectedPath.steps.length} etapas` },
+              { label: "Concluído", value: `${progress}%`, sub: `${count("completed")} de ${leaves.length} etapas` },
               { label: "Em andamento", value: String(count("in_progress")) },
               { label: "Horas estudadas", value: formatHours(actualH), sub: totalH > 0 ? `de ${formatHours(totalH)} estimadas` : undefined },
               { label: "Pendentes", value: String(count("not_started")) },
             ]}
           />
 
+          {/* Add step dialog */}
+          <Dialog open={showAddStep} onOpenChange={(o) => { if (!o) closeAddStep(); }}>
+            <DialogContent className="max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{addParent ? `Novo subtópico em ${addParent.name}` : "Nova etapa"}</DialogTitle>
+              </DialogHeader>
+              <StepForm {...stepFormProps} />
+              <DialogFooter>
+                <Button onClick={handleAddStep} disabled={!stepName.trim()}>Adicionar etapa</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           {/* Edit step dialog */}
           <Dialog open={!!editingStep} onOpenChange={(o) => { if (!o) { setEditingStep(null); resetStepForm(); } }}>
-            <DialogContent>
+            <DialogContent className="max-h-[85vh] overflow-y-auto">
               <DialogHeader><DialogTitle>Editar etapa</DialogTitle></DialogHeader>
-              <StepForm
-                name={stepName} setName={setStepName}
-                icon={stepIcon} setIcon={setStepIcon}
-                hours={stepHours} setHours={setStepHours}
-                subjectId={stepSubjectId} setSubjectId={setStepSubjectId}
-                subjects={subjects}
-              />
+              <StepForm {...stepFormProps} />
               <DialogFooter>
                 <Button onClick={handleEditStep} disabled={!stepName.trim()}>Salvar</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
 
-          {selectedPath.steps.length === 0 ? (
+          {tree.length === 0 ? (
             <EmptyState
               framed
               title="Nenhuma etapa ainda"
-              text="Monte a trilha em etapas, na ordem em que quer estudar. Cada etapa libera a próxima quando concluída."
+              text="Monte a trilha em etapas, na ordem em que quer estudar. Cada etapa pode ter subtópicos."
               action={<Button size="sm" onClick={() => setShowAddStep(true)}><Plus className="w-4 h-4" />Nova etapa</Button>}
             />
           ) : (
-            <ol className="rounded-xl border bg-card p-4 sm:p-6" aria-label="Etapas da trilha">
-              {selectedPath.steps.map((step, idx) => {
-                const isLast = idx === selectedPath.steps.length - 1;
-                const isLocked = step.status === "not_started" && idx > 0 && selectedPath.steps[idx - 1].status !== "completed";
-                const subjectName = getSubjectName(step.subjectId);
+            <RoadmapView tree={tree} onOpen={(n) => setPanelStepId(n.id)} onToggle={setNodeCompleted} />
+          )}
 
-                return (
-                  <li key={step.id} className="relative flex gap-4">
-                    {!isLast && (
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "absolute left-[21px] top-11 bottom-0 w-0.5",
-                          step.status === "completed" ? "bg-success" : "bg-border",
-                        )}
-                      />
-                    )}
-                    <StepMarker icon={step.icon} status={step.status} index={idx} />
-
-                    <div className={cn("flex min-w-0 flex-1 flex-col gap-3 pb-8 pt-1.5 sm:flex-row sm:items-start sm:justify-between", isLast && "pb-0", isLocked && "opacity-55")}>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="font-sans text-base font-semibold">{step.name}</h2>
-                          <Badge className={cn("font-normal", STATUS_BADGE[step.status])}>
-                            {isLocked ? "Bloqueada" : STATUS_LABELS[step.status]}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-muted-foreground">
-                          {step.estimatedHours > 0 && <span>{formatHours(step.estimatedHours)} estimadas</span>}
-                          {step.subjectId && (
-                            <span>
-                              {formatHours(step.actualHours)} estudadas{subjectName && ` em ${subjectName}`}
-                            </span>
-                          )}
-                        </p>
-                      </div>
-
-                      <div className="flex shrink-0 items-center gap-1">
-                        {!isLocked && step.status === "not_started" && (
-                          <Button size="sm" variant="outline" onClick={() => handleStepStatusChange(step.id, "in_progress")}>
-                            Iniciar
-                          </Button>
-                        )}
-                        {step.status === "in_progress" && (
-                          <Button size="sm" onClick={() => handleStepStatusChange(step.id, "completed")}>
-                            Concluir
-                          </Button>
-                        )}
-                        {step.status === "completed" && (
-                          <Button size="sm" variant="ghost" onClick={() => handleStepStatusChange(step.id, "in_progress")}>
-                            Reabrir
-                          </Button>
-                        )}
-                        {idx > 0 && (
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-9 w-9"
-                            onClick={() => moveStep(selectedPath.id, step.id, "up")}
-                            aria-label={`Mover ${step.name} para cima`}
-                          >
-                            <ArrowUp className="w-4 h-4" />
-                          </Button>
-                        )}
-                        <RowActions
-                          itemLabel={`etapa ${step.name}`}
-                          onEdit={() => openEditStep(step)}
-                          onDelete={() => deleteStep(step.id)}
-                        />
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
+          {panelNode && (
+            <StepPanel
+              key={panelNode.id}
+              node={panelNode}
+              courseId={selectedPath.courseId}
+              courseSubjectIds={course?.subjectIds ?? []}
+              moduleName={modules.find(m => m.id === panelNode.moduleId)?.name ?? null}
+              canMoveUp={siblingsOf(panelNode)[0]?.id !== panelNode.id}
+              onClose={() => setPanelStepId(null)}
+              onStart={() => updateStep(panelNode.id, { status: "in_progress" })}
+              onSetCompleted={(completed) => setNodeCompleted(panelNode, completed)}
+              onMoveUp={() => moveStepUp(panelNode)}
+              onAddTopic={() => { setAddParent(panelNode); setPanelStepId(null); setShowAddStep(true); }}
+              onEdit={() => openEditStep(panelNode)}
+              onDelete={() => handleDeleteStep(panelNode)}
+              onSaveNote={async (note) => { await updateStep(panelNode.id, { studyNote: note }); toast({ title: "Anotação salva" }); }}
+              onSessionsChanged={async (added) => {
+                if (added && panelNode.status === "not_started") await updateStep(panelNode.id, { status: "in_progress" });
+                else await refresh();
+              }}
+            />
           )}
         </div>
       </AppLayout>
@@ -386,26 +346,30 @@ export default function LearningPathsPage() {
         title="Trilhas"
         description="Roteiros de estudo em etapas, na ordem em que você quer aprender."
         actions={
-          <Dialog open={showCreatePath} onOpenChange={(o) => { setShowCreatePath(o); if (!o) { setPathName(""); setPathDesc(""); } }}>
-            <DialogTrigger asChild>
-              <Button size="sm"><Plus className="w-4 h-4" />Nova trilha</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Nova trilha</DialogTitle></DialogHeader>
-              <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} />
-              <DialogFooter>
-                <Button onClick={handleCreatePath} disabled={!pathName.trim()}>Criar trilha</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setShowImport(true)}><Upload className="w-4 h-4" />Importar</Button>
+            <Button size="sm" onClick={() => setShowCreatePath(true)}><Plus className="w-4 h-4" />Nova trilha</Button>
+          </div>
         }
       />
 
+      <ImportRoadmapDialog open={showImport} onOpenChange={setShowImport} courses={courses} onImport={handleImport} />
+
+      <Dialog open={showCreatePath} onOpenChange={(o) => { setShowCreatePath(o); if (!o) resetPathForm(); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Nova trilha</DialogTitle></DialogHeader>
+          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
+          <DialogFooter>
+            <Button onClick={handleCreatePath} disabled={!pathName.trim()}>Criar trilha</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit path dialog */}
-      <Dialog open={!!editingPath} onOpenChange={(o) => { if (!o) setEditingPath(null); }}>
+      <Dialog open={!!editingPath} onOpenChange={(o) => { if (!o) { setEditingPath(null); resetPathForm(); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Editar trilha</DialogTitle></DialogHeader>
-          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} />
+          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
           <DialogFooter>
             <Button onClick={handleEditPath} disabled={!pathName.trim()}>Salvar</Button>
           </DialogFooter>
@@ -425,6 +389,9 @@ export default function LearningPathsPage() {
             const progress = getPathProgress(path);
             const totalH = getTotalHours(path);
             const actualH = getActualHours(path);
+            const leafCount = leafSteps(path.steps).length;
+            const roots = buildTree(path.steps);
+            const course = courseOf(path);
 
             return (
               <li
@@ -441,12 +408,18 @@ export default function LearningPathsPage() {
                       {path.name}
                     </button>
                     {path.description && <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{path.description}</p>}
+                    {course && (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <ColorDot color={course.color} className="h-2 w-2" />
+                        {course.name}
+                      </p>
+                    )}
                   </div>
                   <div className="relative z-10">
                     <RowActions
                       itemLabel={`trilha ${path.name}`}
                       deleteWarning="Todas as etapas serão excluídas junto."
-                      onEdit={() => { setEditingPath(path); setPathName(path.name); setPathDesc(path.description); }}
+                      onEdit={() => { setEditingPath(path); setPathName(path.name); setPathDesc(path.description); setPathCourseId(path.courseId); }}
                       onDelete={() => deletePath(path.id)}
                     />
                   </div>
@@ -456,24 +429,27 @@ export default function LearningPathsPage() {
                   <div className="flex items-baseline justify-between text-sm">
                     <span className="font-medium tabular-nums">{progress}%</span>
                     <span className="text-xs tabular-nums text-muted-foreground">
-                      {path.steps.length} {path.steps.length === 1 ? "etapa" : "etapas"}
+                      {leafCount} {leafCount === 1 ? "etapa" : "etapas"}
                       {totalH > 0 && `, ${formatHours(actualH)} de ${formatHours(totalH)}`}
                     </span>
                   </div>
-                  {/* One segment per step, colored by status */}
+                  {/* One segment per main step, colored by status */}
                   <div className="mt-2 flex gap-1" aria-hidden>
-                    {path.steps.length === 0 ? (
+                    {roots.length === 0 ? (
                       <span className="h-2 flex-1 rounded-full bg-muted" />
                     ) : (
-                      path.steps.map(step => (
-                        <span
-                          key={step.id}
-                          className={cn(
-                            "h-2 flex-1 rounded-full",
-                            step.status === "completed" ? "bg-success" : step.status === "in_progress" ? "bg-primary" : "bg-muted",
-                          )}
-                        />
-                      ))
+                      roots.map(root => {
+                        const status = effectiveStatus(root);
+                        return (
+                          <span
+                            key={root.id}
+                            className={cn(
+                              "h-2 flex-1 rounded-full",
+                              status === "completed" ? "bg-success" : status === "in_progress" ? "bg-primary" : "bg-muted",
+                            )}
+                          />
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -486,7 +462,15 @@ export default function LearningPathsPage() {
   );
 }
 
-function PathFields({ name, setName, desc, setDesc }: { name: string; setName: (v: string) => void; desc: string; setDesc: (v: string) => void }) {
+function PathFields({ name, setName, desc, setDesc, courses, courseId, setCourseId }: {
+  name: string;
+  setName: (v: string) => void;
+  desc: string;
+  setDesc: (v: string) => void;
+  courses: Course[];
+  courseId: string | null;
+  setCourseId: (v: string | null) => void;
+}) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -497,6 +481,7 @@ function PathFields({ name, setName, desc, setDesc }: { name: string; setName: (
         <Label htmlFor="path-desc">Descrição <span className="font-normal text-muted-foreground">(opcional)</span></Label>
         <Textarea id="path-desc" value={desc} onChange={e => setDesc(e.target.value)} />
       </div>
+      <CourseSelect id="path-course" courses={courses} value={courseId} onChange={setCourseId} />
     </div>
   );
 }
