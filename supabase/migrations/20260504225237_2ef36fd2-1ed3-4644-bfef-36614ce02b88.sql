@@ -1,0 +1,1 @@
+ALTER TABLE public.courses ADD COLUMN IF NOT EXISTS target_hours numeric NOT NULL DEFAULT 0;

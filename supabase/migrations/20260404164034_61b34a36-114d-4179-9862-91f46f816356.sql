@@ -1,0 +1,1 @@
+ALTER TABLE public.subjects ADD COLUMN icon TEXT DEFAULT NULL;

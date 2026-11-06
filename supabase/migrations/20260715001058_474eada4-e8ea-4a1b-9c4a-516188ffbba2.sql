@@ -1,0 +1,1 @@
+ALTER TABLE public.language_courses ADD COLUMN IF NOT EXISTS subject_ids uuid[] NOT NULL DEFAULT '{}'::uuid[];
