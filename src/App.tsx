@@ -23,6 +23,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import LearningPathsPage from "./pages/LearningPathsPage";
 import LanguagesPage from "./pages/LanguagesPage";
 import LanguageDetailPage from "./pages/LanguageDetailPage";
+import PlannerPage from "./pages/PlannerPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -60,6 +61,7 @@ const App = () => (
               <Route path="/learning-paths" element={<ProtectedApp><LearningPathsPage /></ProtectedApp>} />
               <Route path="/languages" element={<ProtectedApp><LanguagesPage /></ProtectedApp>} />
               <Route path="/languages/:id" element={<ProtectedApp><LanguageDetailPage /></ProtectedApp>} />
+              <Route path="/planejador" element={<ProtectedApp><PlannerPage /></ProtectedApp>} />
               <Route path="/settings" element={<ProtectedApp><SettingsPage /></ProtectedApp>} />
               <Route path="/admin" element={<ProtectedApp><AdminPage /></ProtectedApp>} />
               <Route path="*" element={<NotFound />} />

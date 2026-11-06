@@ -6,7 +6,7 @@ import type { Subject } from "@/lib/types";
 import { useCourses, type Course } from "./useCourses";
 import { useCourseModules, moduleStats, type CourseModule } from "./useCourseModules";
 
-const PACE_DAYS = 28;
+export const PACE_DAYS = 28;
 export const COURSE_WEEKS = 12;
 
 interface TimedEntry {

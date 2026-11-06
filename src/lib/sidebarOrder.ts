@@ -1,4 +1,4 @@
-import { LayoutDashboard, CalendarDays, BookOpen, BarChart3, Trophy, Timer, GraduationCap, MapPin, Languages, LucideIcon } from "lucide-react";
+import { LayoutDashboard, CalendarDays, CalendarRange, BookOpen, BarChart3, Trophy, Timer, GraduationCap, MapPin, Languages, LucideIcon } from "lucide-react";
 
 export interface SidebarLink {
   to: string;
@@ -16,11 +16,12 @@ export const SIDEBAR_LINKS: Record<string, SidebarLink> = {
   "/goals": { to: "/goals", icon: Trophy, label: "Metas" },
   "/learning-paths": { to: "/learning-paths", icon: MapPin, label: "Trilhas" },
   "/languages": { to: "/languages", icon: Languages, label: "Linguagens" },
+  "/planejador": { to: "/planejador", icon: CalendarRange, label: "Planejador" },
 };
 
 export const DEFAULT_ORDER: string[] = [
   "/", "/calendar", "/sessions", "/pomodoro", "/subjects",
-  "/courses", "/goals", "/learning-paths", "/languages",
+  "/courses", "/goals", "/learning-paths", "/languages", "/planejador",
 ];
 
 const KEY = "sidebar_order_v1";

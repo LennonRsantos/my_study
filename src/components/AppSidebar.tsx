@@ -12,7 +12,7 @@ import {
 const SECTIONS: { label: string; keys: string[] }[] = [
   { label: "Navegação", keys: ["/", "/pomodoro", "/calendar"] },
   { label: "Estudos", keys: ["/subjects", "/courses", "/sessions", "/languages"] },
-  { label: "Objetivos", keys: ["/goals", "/learning-paths"] },
+  { label: "Objetivos", keys: ["/goals", "/learning-paths", "/planejador"] },
 ];
 
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring";

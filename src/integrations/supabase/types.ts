@@ -188,6 +188,10 @@ export type Database = {
           description: string | null
           id: string
           name: string
+          plan_days: number[] | null
+          plan_deadline: string | null
+          plan_priority: number
+          plan_weekly_hours: number | null
           target_hours: number
           updated_at: string
           user_id: string
@@ -200,6 +204,10 @@ export type Database = {
           description?: string | null
           id?: string
           name: string
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
           target_hours?: number
           updated_at?: string
           user_id: string
@@ -212,6 +220,10 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
           target_hours?: number
           updated_at?: string
           user_id?: string
@@ -513,6 +525,10 @@ export type Database = {
           level: Database["public"]["Enums"]["language_level"]
           name: string
           notes: string | null
+          plan_days: number[] | null
+          plan_deadline: string | null
+          plan_priority: number
+          plan_weekly_hours: number | null
           resources: Json
           start_date: string | null
           target_hours: number
@@ -527,6 +543,10 @@ export type Database = {
           level?: Database["public"]["Enums"]["language_level"]
           name: string
           notes?: string | null
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
           resources?: Json
           start_date?: string | null
           target_hours?: number
@@ -541,6 +561,10 @@ export type Database = {
           level?: Database["public"]["Enums"]["language_level"]
           name?: string
           notes?: string | null
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
           resources?: Json
           start_date?: string | null
           target_hours?: number
@@ -635,6 +659,54 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      plan_blocks: {
+        Row: {
+          course_id: string | null
+          created_at: string
+          date: string
+          id: string
+          label: string | null
+          language_id: string | null
+          planned_minutes: number
+          user_id: string
+        }
+        Insert: {
+          course_id?: string | null
+          created_at?: string
+          date: string
+          id?: string
+          label?: string | null
+          language_id?: string | null
+          planned_minutes: number
+          user_id: string
+        }
+        Update: {
+          course_id?: string | null
+          created_at?: string
+          date?: string
+          id?: string
+          label?: string | null
+          language_id?: string | null
+          planned_minutes?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_blocks_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_blocks_language_id_fkey"
+            columns: ["language_id"]
+            isOneToOne: false
+            referencedRelation: "languages"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       pomodoro_settings: {
         Row: {
