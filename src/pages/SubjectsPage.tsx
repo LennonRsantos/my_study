@@ -10,10 +10,9 @@ import { Plus, Search, X } from "lucide-react";
 import PageHeader from "@/components/page/PageHeader";
 import EmptyState from "@/components/page/EmptyState";
 import RowActions from "@/components/page/RowActions";
-import ColorSwatchPicker from "@/components/page/ColorSwatchPicker";
 import { useStats } from "@/hooks/useStats";
 import { formatHours } from "@/lib/format";
-import { Subject, SUBJECT_COLORS, DEVICON_LIST } from "@/lib/types";
+import { Subject, SUBJECT_COLORS, DEVICON_LIST, EMOJI_LIST, firstEmoji } from "@/lib/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CategoryManager } from "@/components/CategoryManager";
 import { CategoryBadges } from "@/components/CategoryBadges";
@@ -43,12 +42,13 @@ export default function SubjectsPage() {
       })()
     : subjects;
 
-  const handleSave = async (name: string, color: string, icon: string | undefined, categoryIds: string[]) => {
+  const handleSave = async (name: string, icon: string | undefined, categoryIds: string[]) => {
     const id = editing ? editing.id : crypto.randomUUID();
     if (editing) {
-      updateSubject({ ...editing, name, color, icon });
+      updateSubject({ ...editing, name, icon });
     } else {
-      addSubject({ id, name, color, icon });
+      // Charts and dots in other pages still tell subjects apart by color.
+      addSubject({ id, name, color: SUBJECT_COLORS[subjects.length % SUBJECT_COLORS.length], icon });
     }
     await setItemCategories(id, "subject", categoryIds);
     setEditing(null);
@@ -98,8 +98,8 @@ export default function SubjectsPage() {
               const hours = hoursBySubject.get(s.id) || 0;
               return (
                 <li key={s.id} className="flex items-start gap-4 rounded-xl border bg-card p-4">
-                  <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: s.color }}>
-                    {s.icon ? <DeviconImg icon={s.icon} size={22} /> : <span className="font-display text-base font-semibold text-white">{s.name.charAt(0).toUpperCase()}</span>}
+                  <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center">
+                    {s.icon ? <DeviconImg icon={s.icon} size={32} /> : <span className="font-display text-2xl font-semibold text-muted-foreground">{s.name.charAt(0).toUpperCase()}</span>}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{s.name}</p>
@@ -134,17 +134,18 @@ function SubjectForm({
   initial: Subject | null;
   categories: { id: string; name: string; color: string }[];
   initialCategories: string[];
-  onSave: (name: string, color: string, icon: string | undefined, categoryIds: string[]) => void;
+  onSave: (name: string, icon: string | undefined, categoryIds: string[]) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(initial?.name || "");
-  const [color, setColor] = useState(initial?.color || SUBJECT_COLORS[0]);
   const [icon, setIcon] = useState<string | undefined>(initial?.icon);
   const [iconSearch, setIconSearch] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>(initialCategories);
 
   const filteredIcons = useMemo(() => {
-    if (!iconSearch.trim()) return DEVICON_LIST;
+    if (!iconSearch.trim()) return [...EMOJI_LIST, ...DEVICON_LIST];
+    const emoji = firstEmoji(iconSearch);
+    if (emoji) return [emoji];
     const q = iconSearch.toLowerCase();
     return DEVICON_LIST.filter((i) => i.includes(q));
   }, [iconSearch]);
@@ -155,24 +156,20 @@ function SubjectForm({
         <Label htmlFor="subject-name">Nome</Label>
         <Input id="subject-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Matemática" />
       </div>
-      <div className="space-y-2">
-        <Label id="subject-color-label">Cor</Label>
-        <ColorSwatchPicker value={color} onChange={setColor} colors={SUBJECT_COLORS} label="Cor da matéria" />
-      </div>
       <div>
         <Label className="flex items-center justify-between">
           <span>Ícone <span className="font-normal text-muted-foreground">(opcional)</span></span>
           {icon && <button type="button" onClick={() => setIcon(undefined)} className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><X className="w-3 h-3" aria-hidden /> Remover ícone</button>}
         </Label>
         <div className="flex items-center gap-3 mt-2 mb-3">
-          <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: color }} aria-hidden>
-            {icon ? <DeviconImg icon={icon} size={26} /> : <span className="text-white font-bold text-lg">{name ? name.charAt(0).toUpperCase() : "?"}</span>}
+          <div className="w-12 h-12 flex items-center justify-center" aria-hidden>
+            {icon ? <DeviconImg icon={icon} size={36} /> : <span className="text-muted-foreground font-bold text-2xl">{name ? name.charAt(0).toUpperCase() : "?"}</span>}
           </div>
           <span className="text-sm text-muted-foreground">{icon ? icon : "Nenhum ícone selecionado"}</span>
         </div>
         <div className="relative mb-2">
           <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" aria-hidden />
-          <Input type="search" aria-label="Buscar ícone" value={iconSearch} onChange={(e) => setIconSearch(e.target.value)} placeholder="Buscar ícone (ex.: react, python)…" className="pl-9" />
+          <Input type="search" aria-label="Buscar ícone" value={iconSearch} onChange={(e) => setIconSearch(e.target.value)} placeholder="Buscar ícone ou colar emoji…" className="pl-9" />
         </div>
         <ScrollArea className="h-40 border rounded-lg p-2">
           <div className="grid grid-cols-6 sm:grid-cols-8 gap-2">
@@ -193,7 +190,7 @@ function SubjectForm({
       )}
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="outline" onClick={onCancel}>Cancelar</Button>
-        <Button disabled={!name.trim()} onClick={() => onSave(name.trim(), color, icon, selectedCategories)}>
+        <Button disabled={!name.trim()} onClick={() => onSave(name.trim(), icon, selectedCategories)}>
           {initial ? "Salvar" : "Criar"}
         </Button>
       </div>

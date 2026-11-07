@@ -26,13 +26,14 @@ import { CategoryPicker } from "@/components/CategoryPicker";
 import { CourseModules } from "@/components/CourseModules";
 import { useCourseModules, moduleStats, type CourseModule } from "@/hooks/useCourseModules";
 import { useCourses, type Course } from "@/hooks/useCourses";
+import type { ImportedModule } from "@/lib/courseImport";
 
 
 export default function CoursesPage() {
   const { subjects, sessions, practiceSessions } = useStudy();
   const { user } = useAuth();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, addCategory, updateCategory, deleteCategory } = useCategories("course");
-  const { modules, loading: modulesLoading, modulesFor, addModule, updateModule, toggleModuleComplete, deleteModule } = useCourseModules();
+  const { modules, loading: modulesLoading, modulesFor, addModule, updateModule, toggleModuleComplete, toggleLesson, importModules, deleteModule } = useCourseModules();
   const { courses, loading, refresh: fetchCourses } = useCourses();
   const [editing, setEditing] = useState<Course | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -102,6 +103,26 @@ export default function CoursesPage() {
     if (wasCompleted?.completed) await reopenIfCompleted(wasCompleted.course_id);
   };
 
+  const handleToggleLesson = async (moduleId: string, lessonId: string) => {
+    const mod = modules.find((m) => m.id === moduleId);
+    const wasDone = mod?.lessons?.find((l) => l.id === lessonId)?.completed;
+    await toggleLesson(moduleId, lessonId);
+    if (mod && wasDone) await reopenIfCompleted(mod.course_id);
+  };
+
+  const handleImportModules = async (courseId: string, imported: ImportedModule[]) => {
+    const created = await importModules(courseId, imported);
+    if (created === null) return false;
+    if (created === 0) {
+      toast.info("Todos os módulos do JSON já existem neste curso");
+      return true;
+    }
+    const skipped = imported.length - created;
+    toast.success(`${created} módulos importados${skipped > 0 ? `, ${skipped} já existiam` : ""}`);
+    if (imported.some((m) => m.lessons.some((l) => !l.completed))) await reopenIfCompleted(courseId);
+    return true;
+  };
+
   const filterIds = filterCategory ? new Set(getItemsInCategory(filterCategory, "course")) : null;
   const activeCourses = courses.filter((c) => !c.completed && (!filterIds || filterIds.has(c.id)));
   const completedCourses = courses.filter((c) => c.completed && (!filterIds || filterIds.has(c.id)));
@@ -143,6 +164,8 @@ export default function CoursesPage() {
       onAddModule={handleAddModule}
       onUpdateModule={updateModule}
       onToggleModule={handleToggleModule}
+      onToggleLesson={handleToggleLesson}
+      onImportModules={(imported) => handleImportModules(course.id, imported)}
       onDeleteModule={deleteModule}
     />
   );
@@ -208,7 +231,7 @@ export default function CoursesPage() {
   );
 }
 
-function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, onDelete, onToggleComplete, modules, onAddModule, onUpdateModule, onToggleModule, onDeleteModule }: {
+function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, onDelete, onToggleComplete, modules, onAddModule, onUpdateModule, onToggleModule, onToggleLesson, onImportModules, onDeleteModule }: {
   course: Course;
   subjects: { id: string; name: string; color: string }[];
   categories: { id: string; name: string; color: string }[];
@@ -220,6 +243,8 @@ function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, on
   onAddModule: (v: Omit<CourseModule, "id" | "position" | "completed" | "completed_at">) => Promise<void> | void;
   onUpdateModule: (id: string, patch: Partial<CourseModule>) => Promise<void> | void;
   onToggleModule: (id: string) => Promise<void> | void;
+  onToggleLesson: (moduleId: string, lessonId: string) => Promise<void> | void;
+  onImportModules: (modules: ImportedModule[]) => Promise<boolean>;
   onDeleteModule: (id: string) => Promise<void> | void;
 }) {
   const linkedSubjects = subjects.filter((s) => course.subjectIds.includes(s.id));
@@ -301,6 +326,8 @@ function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, on
           onAdd={onAddModule}
           onUpdate={onUpdateModule}
           onToggleComplete={onToggleModule}
+          onToggleLesson={onToggleLesson}
+          onImport={onImportModules}
           onDelete={onDeleteModule}
         />
       </div>

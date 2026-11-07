@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { DEVICON_LIST } from "@/lib/types";
+import { DEVICON_LIST, EMOJI_LIST, firstEmoji, isEmojiIcon } from "@/lib/types";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,9 @@ export default function SearchableIconPicker({ value, onValueChange, placeholder
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return DEVICON_LIST;
+    if (!search.trim()) return [...EMOJI_LIST, ...DEVICON_LIST];
+    const emoji = firstEmoji(search);
+    if (emoji) return [emoji];
     const q = search.toLowerCase();
     return DEVICON_LIST.filter(icon => icon.toLowerCase().includes(q));
   }, [search]);
@@ -30,7 +32,7 @@ export default function SearchableIconPicker({ value, onValueChange, placeholder
           {value ? (
             <>
               <BrandIcon icon={value} size={20} />
-              <span className="capitalize">{value}</span>
+              <span className={isEmojiIcon(value) ? "" : "capitalize"}>{value}</span>
               <X
                 className="w-4 h-4 ml-auto opacity-50 hover:opacity-100"
                 onClick={(e) => { e.stopPropagation(); onValueChange(""); }}
@@ -45,7 +47,7 @@ export default function SearchableIconPicker({ value, onValueChange, placeholder
         <div className="flex items-center gap-2 px-2 pb-2 border-b">
           <Search className="w-4 h-4 text-muted-foreground shrink-0" />
           <Input
-            placeholder="Buscar ícone..."
+            placeholder="Buscar ícone ou colar emoji…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -64,7 +66,7 @@ export default function SearchableIconPicker({ value, onValueChange, placeholder
                   title={icon}
                 >
                   <BrandIcon icon={icon} size={24} />
-                  <span className="text-[9px] text-muted-foreground truncate w-full text-center">{icon}</span>
+                  {!isEmojiIcon(icon) && <span className="text-[9px] text-muted-foreground truncate w-full text-center">{icon}</span>}
                 </button>
               ))}
             </div>

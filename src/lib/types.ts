@@ -2,7 +2,7 @@ export interface Subject {
   id: string;
   name: string;
   color: string;
-  icon?: string; // devicon icon name e.g. "react"
+  icon?: string; // devicon icon name e.g. "react", or an emoji e.g. "📚"
 }
 
 export interface StudySession {
@@ -86,6 +86,21 @@ export const SUBJECT_COLORS = [
   "#0284c7", "#65a30d", "#c026d3", "#d97706", "#334155",
   "#6366f1", "#14b8a6", "#f43f5e", "#8b5cf6", "#ec4899",
 ];
+
+export const EMOJI_LIST = [
+  "📚", "📖", "📝", "✏️", "🎓", "🧠", "💡", "🎯",
+  "📐", "📏", "➗", "🔢", "📊", "🧮", "🧪", "⚗️",
+  "🔬", "🧬", "⚛️", "🔭", "🌍", "🗺️", "🏛️", "⚖️",
+  "💰", "📈", "🩺", "💊", "🌱", "🎨", "🎵", "🎭",
+  "📷", "🎬", "💻", "🤖", "🔧", "🏋️", "🗣️", "✍️",
+];
+
+// A single emoji, including flags and sequences such as 👩‍💻.
+const EMOJI = /\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(\p{Emoji_Modifier}|️)*(‍\p{Extended_Pictographic}(\p{Emoji_Modifier}|️)*)*/u;
+
+export const isEmojiIcon = (icon: string) => EMOJI.test(icon);
+
+export const firstEmoji = (text: string) => text.match(EMOJI)?.[0];
 
 export const DEVICON_LIST = [
   // Languages

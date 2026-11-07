@@ -1,5 +1,5 @@
 import AppLayout from "@/components/AppLayout";
-import { getDeviconUrl, getDeviconUrlFallback } from "@/lib/types";
+import { BrandIcon } from "@/components/BrandIcon";
 import { useStudy } from "@/contexts/StudyContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCategories } from "@/hooks/useCategories";
@@ -61,7 +61,7 @@ const blankAllocation = (): SubjectAllocation => ({
 export default function SessionsPage() {
   const { sessions, subjects, addSession, updateSession, deleteSession } = useStudy();
   const { user } = useAuth();
-  const { modules, modulesFor, updateModule } = useCourseModules();
+  const { modules, modulesFor, setModuleCompleted } = useCourseModules();
   const { paths } = useLearningPaths();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, getDescendantIds, addCategory, updateCategory, deleteCategory } = useCategories("session");
   const [editing, setEditing] = useState<StudySession | null>(null);
@@ -108,7 +108,7 @@ export default function SessionsPage() {
     for (const id of Array.from(new Set(moduleIds))) {
       const mod = modules.find((m) => m.id === id);
       if (!mod || mod.completed) continue;
-      await updateModule(id, { completed: true, completed_at: new Date().toISOString() });
+      await setModuleCompleted(id, true);
       names.push(mod.name);
     }
     return names;
@@ -312,28 +312,14 @@ export default function SessionsPage() {
   );
 }
 
-/** Subject's color square with its devicon (or initial). */
+/** Subject's icon or emoji (or initial). */
 function SubjectMark({ subject }: { subject?: Subject }) {
   return (
-    <span
-      aria-hidden
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-      style={{ backgroundColor: subject?.color || "hsl(var(--muted-foreground))" }}
-    >
+    <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center">
       {subject?.icon ? (
-        <img
-          src={getDeviconUrl(subject.icon)}
-          alt=""
-          width={18}
-          height={18}
-          className="object-contain"
-          onError={(e) => {
-            const img = e.currentTarget;
-            if (!img.dataset.fallback) { img.dataset.fallback = "1"; img.src = getDeviconUrlFallback(subject.icon!); }
-          }}
-        />
+        <BrandIcon icon={subject.icon} size={26} />
       ) : (
-        <span className="font-display text-sm font-semibold text-white">{subject?.name?.charAt(0) || "?"}</span>
+        <span className="font-display text-xl font-semibold text-muted-foreground">{subject?.name?.charAt(0) || "?"}</span>
       )}
     </span>
   );

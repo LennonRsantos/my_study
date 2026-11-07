@@ -17,7 +17,8 @@ import EmptyState from "@/components/page/EmptyState";
 import RowActions from "@/components/page/RowActions";
 import StatRow from "@/components/page/StatRow";
 import { ColorDot, LoadingState } from "@/components/page/bits";
-import { getDeviconUrl, Subject } from "@/lib/types";
+import { Subject } from "@/lib/types";
+import { BrandIcon } from "@/components/BrandIcon";
 import { toast } from "@/hooks/use-toast";
 import { Label } from "@/components/ui/label";
 import SearchableIconPicker from "@/components/SearchableIconPicker";
@@ -67,7 +68,7 @@ function StepForm({ name, setName, icon, setIcon, hours, setHours, subjectId, se
             {subjects.map(s => (
               <SelectItem key={s.id} value={s.id}>
                 <span className="flex items-center gap-2">
-                  {s.icon ? <img src={getDeviconUrl(s.icon)} alt="" width={16} height={16} className="w-4 h-4" /> : <ColorDot color={s.color} />}
+                  {s.icon ? <BrandIcon icon={s.icon} size={16} /> : <ColorDot color={s.color} />}
                   {s.name}
                 </span>
               </SelectItem>

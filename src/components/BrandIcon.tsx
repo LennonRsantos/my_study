@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { SIMPLE_ICONS, getDeviconUrl, getDeviconUrlFallback } from "@/lib/types";
+import { SIMPLE_ICONS, getDeviconUrl, getDeviconUrlFallback, isEmojiIcon } from "@/lib/types";
 
 // In-memory cache so we only fetch each SVG once per session
 const svgCache = new Map<string, string>();
@@ -16,6 +16,7 @@ interface BrandIconProps {
  * Renders a tech/brand icon.
  * - Devicon icons: rendered as <img> with their original multi-color SVG.
  * - Simple Icons (AI/LLM brands): fetched and recolored with the official brand color.
+ * - Emoji: rendered as text.
  */
 export function BrandIcon({ icon, size = 24, colorOverride, className }: BrandIconProps) {
   const isSimple = !!SIMPLE_ICONS[icon];
@@ -59,6 +60,17 @@ export function BrandIcon({ icon, size = 24, colorOverride, className }: BrandIc
         style={{ width: size, height: size, display: "inline-flex" }}
         dangerouslySetInnerHTML={{ __html: colored }}
       />
+    );
+  }
+
+  if (isEmojiIcon(icon)) {
+    return (
+      <span
+        className={className}
+        style={{ width: size, height: size, fontSize: size * 0.85, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+      >
+        {icon}
+      </span>
     );
   }
 

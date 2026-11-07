@@ -4,7 +4,7 @@ import { ptBR } from "date-fns/locale";
 import { useStudy } from "@/contexts/StudyContext";
 import type { Subject } from "@/lib/types";
 import { useCourses, type Course } from "./useCourses";
-import { useCourseModules, moduleStats, type CourseModule } from "./useCourseModules";
+import { useCourseModules, moduleDoneMinutes, moduleLessonsDone, moduleStats, type CourseModule } from "./useCourseModules";
 
 export const PACE_DAYS = 28;
 export const COURSE_WEEKS = 12;
@@ -59,6 +59,18 @@ export interface CourseInsights {
 
 const NO_SUBJECT = "__none__";
 
+const dayOf = (iso: string) => format(parseISO(iso), "yyyy-MM-dd");
+
+/** Dated completions of a module: each checked lesson, or the module itself when it has no lessons. */
+function moduleEvents(m: CourseModule): { day: string; hours: number }[] {
+  if (m.lessons?.length) {
+    return m.lessons
+      .filter((l) => l.completed && l.completed_at)
+      .map((l) => ({ day: dayOf(l.completed_at!), hours: (l.duration_seconds ?? 0) / 3600 }));
+  }
+  return m.completed && m.completed_at ? [{ day: dayOf(m.completed_at), hours: (m.duration_minutes ?? 0) / 60 }] : [];
+}
+
 function subjectShares(hoursById: Map<string, number>, subjects: Subject[]): SubjectShare[] {
   return [...hoursById.entries()]
     .filter(([, h]) => h > 0)
@@ -97,16 +109,14 @@ export function buildCourseInsights(
     let events: { day: string; hours: number }[];
 
     if (source === "modules") {
-      const done = modules.filter((m) => m.completed && (m.duration_minutes ?? 0) > 0);
+      const done = modules.filter((m) => (m.duration_minutes ?? 0) > 0 && moduleDoneMinutes(m) > 0);
       for (const m of done) {
-        const hours = (m.duration_minutes ?? 0) / 60;
+        const hours = moduleDoneMinutes(m) / 60;
         // Split a module's time across its subjects; fall back to the course's subjects
         const ids = m.subject_ids?.length ? m.subject_ids : course.subjectIds.length ? course.subjectIds : [NO_SUBJECT];
         ids.forEach((id) => add(id, hours / ids.length));
       }
-      events = done
-        .filter((m) => m.completed_at)
-        .map((m) => ({ day: format(parseISO(m.completed_at!), "yyyy-MM-dd"), hours: (m.duration_minutes ?? 0) / 60 }));
+      events = done.flatMap(moduleEvents);
     } else {
       courseEntries.forEach((e) => add(e.subjectId || NO_SUBJECT, e.hours));
       events = courseEntries.map((e) => ({ day: e.date, hours: e.hours }));
@@ -132,7 +142,7 @@ export function buildCourseInsights(
       sessionHours,
       modulesDone: stats.doneCount,
       modulesTotal: modules.length,
-      lessonsDone: modules.filter((m) => m.completed).reduce((a, m) => a + (m.lesson_count || 0), 0),
+      lessonsDone: modules.reduce((a, m) => a + moduleLessonsDone(m), 0),
       lessonsTotal: modules.reduce((a, m) => a + (m.lesson_count || 0), 0),
       subjects: shares,
       topSubject: shares[0] ?? null,

@@ -23,6 +23,8 @@ import StatRow, { Delta } from "@/components/page/StatRow";
 import ColorSwatchPicker from "@/components/page/ColorSwatchPicker";
 import DayGroupedList from "@/components/page/DayGroupedList";
 import { ColorAvatar, ColorDot, HoursProgress, LoadingState } from "@/components/page/bits";
+import SearchableIconPicker from "@/components/SearchableIconPicker";
+import { BrandIcon } from "@/components/BrandIcon";
 import ChartCard from "@/components/dashboard/ChartCard";
 import ChartTooltip from "@/components/dashboard/ChartTooltip";
 import RankedBars from "@/components/dashboard/RankedBars";
@@ -225,14 +227,15 @@ function SubjectsTab({ data }: { data: ReturnType<typeof useLanguageData> }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<LangSubject | null>(null);
   const [name, setName] = useState("");
-  const [color, setColor] = useState(SUBJECT_COLORS[1]);
+  const [icon, setIcon] = useState("");
 
-  const openNew = () => { setEditing(null); setName(""); setColor(SUBJECT_COLORS[1]); setOpen(true); };
-  const openEdit = (s: LangSubject) => { setEditing(s); setName(s.name); setColor(s.color); setOpen(true); };
+  const openNew = () => { setEditing(null); setName(""); setIcon(""); setOpen(true); };
+  const openEdit = (s: LangSubject) => { setEditing(s); setName(s.name); setIcon(s.icon || ""); setOpen(true); };
   const save = async () => {
     if (!name.trim()) return;
-    if (editing) await data.updateSubject(editing.id, { name: name.trim(), color });
-    else await data.addSubject({ name: name.trim(), color, icon: null });
+    if (editing) await data.updateSubject(editing.id, { name: name.trim(), icon: icon || null });
+    // Color stays automatic: ColorDot/ColorAvatar elsewhere still tell subjects apart by it.
+    else await data.addSubject({ name: name.trim(), color: SUBJECT_COLORS[data.subjects.length % SUBJECT_COLORS.length], icon: icon || null });
     toast.success(editing ? "Matéria salva" : "Matéria criada");
     setOpen(false);
   };
@@ -249,7 +252,11 @@ function SubjectsTab({ data }: { data: ReturnType<typeof useLanguageData> }) {
         <ul className="grid gap-3 sm:grid-cols-2">
           {data.subjects.map((s) => (
             <li key={s.id} className="flex items-center gap-3 rounded-xl border bg-card p-4">
-              <ColorAvatar color={s.color} name={s.name} className="h-9 w-9 text-sm" />
+              {s.icon ? (
+                <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center"><BrandIcon icon={s.icon} size={26} /></span>
+              ) : (
+                <ColorAvatar color={s.color} name={s.name} className="h-9 w-9 text-sm" />
+              )}
               <span className="flex-1 truncate font-medium">{s.name}</span>
               <RowActions
                 itemLabel={`matéria ${s.name}`}
@@ -269,8 +276,8 @@ function SubjectsTab({ data }: { data: ReturnType<typeof useLanguageData> }) {
               <Input id="lang-subject-name" required value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Cor</Label>
-              <ColorSwatchPicker value={color} onChange={setColor} label="Cor da matéria" />
+              <Label>Ícone <span className="font-normal text-muted-foreground">(opcional)</span></Label>
+              <SearchableIconPicker value={icon} onValueChange={setIcon} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>

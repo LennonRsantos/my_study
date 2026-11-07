@@ -5,13 +5,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Check, ChevronRight, Clock, Plus, PlayCircle } from "lucide-react";
+import { Check, ChevronRight, Clock, FileJson, Plus, PlayCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
 import RowActions from "@/components/page/RowActions";
 import { ColorDot } from "@/components/page/bits";
 import { toast } from "sonner";
-import type { CourseModule } from "@/hooks/useCourseModules";
+import ImportModulesDialog from "@/components/ImportModulesDialog";
+import { moduleLessonsDone, type CourseModule } from "@/hooks/useCourseModules";
+import type { ImportedModule } from "@/lib/courseImport";
 
 type ModuleFields = { name: string; description: string; lesson_count: number; duration_minutes: number | null; subject_ids: string[] };
 
@@ -24,6 +26,8 @@ export function CourseModules({
   onAdd,
   onUpdate,
   onToggleComplete,
+  onToggleLesson,
+  onImport,
   onDelete,
 }: {
   courseId: string;
@@ -32,10 +36,14 @@ export function CourseModules({
   onAdd: (v: Omit<CourseModule, "id" | "position" | "completed" | "completed_at">) => Promise<void> | void;
   onUpdate: (id: string, patch: Partial<CourseModule>) => Promise<void> | void;
   onToggleComplete: (id: string) => Promise<void> | void;
+  onToggleLesson: (moduleId: string, lessonId: string) => Promise<void> | void;
+  onImport: (modules: ImportedModule[]) => Promise<boolean>;
   onDelete: (id: string) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [openModules, setOpenModules] = useState<string[]>([]);
   const [editing, setEditing] = useState<CourseModule | null>(null);
 
   const totalLessons = modules.reduce((a, m) => a + (m.lesson_count || 0), 0);
@@ -45,6 +53,9 @@ export function CourseModules({
     totalLessons > 0 ? `${totalLessons} aulas` : null,
     doneCount > 0 ? `${doneCount} ${doneCount === 1 ? "concluído" : "concluídos"}` : null,
   ].filter(Boolean).join(", ");
+
+  const toggleModuleOpen = (id: string) =>
+    setOpenModules((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const handleSave = async (v: ModuleFields) => {
     if (editing) {
@@ -70,10 +81,13 @@ export function CourseModules({
           <ChevronRight className={`h-4 w-4 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
           {summary}
         </button>
+        <Button variant="ghost" size="sm" className="ml-auto h-8 px-2" onClick={() => setImportOpen(true)}>
+          <FileJson className="h-3.5 w-3.5" />Importar JSON
+        </Button>
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto h-8 px-2"
+          className="h-8 px-2"
           onClick={() => { setEditing(null); setDialogOpen(true); setOpen(true); }}
         >
           <Plus className="h-3.5 w-3.5" />Novo módulo
@@ -88,6 +102,8 @@ export function CourseModules({
             <ol className="divide-y rounded-lg bg-muted/40">
               {modules.map((m, i) => {
                 const mSubjects = subjects.filter((s) => (m.subject_ids || []).includes(s.id));
+                const lessons = m.lessons ?? [];
+                const lessonsOpen = openModules.includes(m.id);
                 return (
                   <li key={m.id} className="flex items-start gap-3 px-3 py-2.5">
                     <button
@@ -114,7 +130,18 @@ export function CourseModules({
                             <Clock className="h-3 w-3" aria-hidden />{formatDuration((m.duration_minutes ?? 0) / 60)}
                           </span>
                         )}
-                        {m.lesson_count > 0 && (
+                        {lessons.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleModuleOpen(m.id)}
+                            aria-expanded={lessonsOpen}
+                            aria-label={`Aulas do módulo ${m.name}: ${moduleLessonsDone(m)} de ${lessons.length} concluídas`}
+                            className="inline-flex items-center gap-1 rounded text-xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <ChevronRight className={`h-3 w-3 transition-transform ${lessonsOpen ? "rotate-90" : ""}`} aria-hidden />
+                            {moduleLessonsDone(m)} de {lessons.length} aulas
+                          </button>
+                        ) : m.lesson_count > 0 && (
                           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                             <PlayCircle className="h-3 w-3" aria-hidden />{m.lesson_count} aulas
                           </span>
@@ -131,6 +158,23 @@ export function CourseModules({
                           ))}
                         </ul>
                       )}
+                      {lessonsOpen && (
+                        <ol className="mt-2 space-y-0.5">
+                          {lessons.map((l) => (
+                            <li key={l.id}>
+                              <label className="flex cursor-pointer items-center gap-2 rounded py-1 text-sm">
+                                <Checkbox checked={l.completed} onCheckedChange={() => onToggleLesson(m.id, l.id)} />
+                                <span className={cn("min-w-0 flex-1", l.completed && "text-muted-foreground")}>{l.name}</span>
+                                {(l.duration_seconds ?? 0) > 0 && (
+                                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                                    {formatDuration((l.duration_seconds ?? 0) / 3600)}
+                                  </span>
+                                )}
+                              </label>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
                     </div>
                     <RowActions
                       itemLabel={`módulo ${m.name}`}
@@ -144,6 +188,16 @@ export function CourseModules({
           )}
         </div>
       )}
+
+      <ImportModulesDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImport={async (imported) => {
+          const done = await onImport(imported);
+          if (done) setOpen(true);
+          return done;
+        }}
+      />
 
       <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); if (!o) setEditing(null); }}>
         <DialogContent className="max-h-[85vh] overflow-y-auto">
