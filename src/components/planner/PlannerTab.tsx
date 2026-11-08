@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { addDays, endOfWeek, format, parseISO, startOfWeek } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Minus, Plus, Sparkles, X } from "lucide-react";
+import { Minus, Plus, Route, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,7 @@ import PlanSettingsDialog from "./PlanSettingsDialog";
 import { formatDuration, formatHours } from "@/lib/format";
 import { buildPlan, overloadedDays, splitBlock, type PlanBlock, type PlanKind, type PlanRow, type PlanSettings, type PlanStatus } from "@/lib/planner";
 import { toDayKey } from "@/lib/streak";
-import type { PlannerItem, StoredBlock } from "@/hooks/usePlanner";
+import type { BlockStatus, PlannerItem, StoredBlock } from "@/hooks/usePlanner";
 
 const STEP = 15;
 const AGENDA_DAYS = 14;
@@ -39,19 +39,23 @@ interface PlannerTabProps {
   emptyText: string;
   onSaveSettings: (item: PlannerItem, s: PlanSettings, workloadHours?: number) => Promise<boolean>;
   onReplace: (kind: PlanKind, drafts: PlanBlock[]) => Promise<boolean>;
+  onSetStatus: (blockId: string, status: BlockStatus) => Promise<boolean>;
 }
 
 interface AgendaEntry {
   block: PlanBlock;
   /** Index in the draft; null for confirmed blocks, which are read-only. */
   draftIndex: number | null;
+  /** Saved row behind a confirmed entry; null for draft entries. */
+  stored: StoredBlock | null;
 }
 
 export default function PlannerTab({
-  kind, items, budgetHours, frozen, blocks, done, reserved, limitHours, maxBlockMinutes, emptyText, onSaveSettings, onReplace,
+  kind, items, budgetHours, frozen, blocks, done, reserved, limitHours, maxBlockMinutes, emptyText, onSaveSettings, onReplace, onSetStatus,
 }: PlannerTabProps) {
   const [draft, setDraft] = useState<PlanBlock[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [rerouted, setRerouted] = useState(false);
 
   const today = new Date();
   const todayKey = toDayKey(today);
@@ -63,21 +67,27 @@ export default function PlannerTab({
   const rowByKey = useMemo(() => new Map(plan.rows.map((r) => [r.key, r])), [plan]);
   const itemByKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items]);
 
-  const confirmed: PlanBlock[] = useMemo(
-    () => blocks.filter((b) => b.kind === kind).map((b) => ({ itemKey: b.itemKey, date: b.date, minutes: b.minutes, label: b.label })),
-    [blocks, kind],
-  );
+  const confirmed = useMemo(() => blocks.filter((b) => b.kind === kind && b.blockType === "study"), [blocks, kind]);
+  const toPlan = (b: StoredBlock): PlanBlock => ({ itemKey: b.itemKey, date: b.date, minutes: b.minutes, label: b.label });
+  // Only planned future blocks are replaceable; past days and blocks marked as missed stay as history.
+  const replaceable = (b: StoredBlock) => b.date >= todayKey && b.status === "planned";
 
-  // Past days always show confirmed blocks. Today onward shows the draft when one is open.
   const agenda: AgendaEntry[] = useMemo(() => {
-    const past = confirmed
-      .filter((b) => b.date < todayKey)
-      .map((block) => ({ block, draftIndex: null }));
+    const kept = confirmed
+      .filter((b) => !replaceable(b))
+      .map((b) => ({ block: toPlan(b), draftIndex: null, stored: b }));
     const future: AgendaEntry[] = draft
-      ? draft.map((block, draftIndex) => ({ block, draftIndex })).filter((e) => e.block.date >= todayKey)
-      : confirmed.filter((b) => b.date >= todayKey).map((block) => ({ block, draftIndex: null }));
-    return [...past, ...future].filter((e) => itemByKey.has(e.block.itemKey));
+      ? draft.map((block, draftIndex) => ({ block, draftIndex, stored: null })).filter((e) => e.block.date >= todayKey)
+      : confirmed.filter(replaceable).map((b) => ({ block: toPlan(b), draftIndex: null, stored: b }));
+    return [...kept, ...future].filter((e) => itemByKey.has(e.block.itemKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers only read todayKey
   }, [confirmed, draft, todayKey, itemByKey]);
+
+  // Minutes of missed blocks still not studied that day; they return to the remaining total.
+  const missedPending = confirmed
+    .filter((b) => b.status === "missed")
+    .reduce((a, b) => a + Math.max(0, b.minutes - (done.get(`${b.itemKey}|${b.date}`) ?? 0)), 0);
+  const missedToday = confirmed.some((b) => b.status === "missed" && b.date === todayKey);
 
   const weekStart = toDayKey(startOfWeek(today, { weekStartsOn: 1 }));
   const weekEnd = toDayKey(endOfWeek(today, { weekStartsOn: 1 }));
@@ -108,9 +118,29 @@ export default function PlannerTab({
     if (entries?.length) days.push({ key, entries });
   }
 
-  const generate = () => setDraft(plan.blocks.filter((b) => itemByKey.has(b.itemKey)));
-  const adjust = () => setDraft(confirmed.filter((b) => b.date >= todayKey));
+  const generate = () => {
+    setRerouted(false);
+    setDraft(plan.blocks.filter((b) => itemByKey.has(b.itemKey)));
+  };
+  const adjust = () => {
+    setRerouted(false);
+    setDraft(confirmed.filter(replaceable).map(toPlan));
+  };
   const cancel = () => setDraft(null);
+
+  // Remaining hours already reflect real study, so a fresh plan from today redistributes what was missed.
+  // A block missed today means today is lost: start from tomorrow.
+  const reroute = () => {
+    const skip = missedToday ? new Set([...frozen, todayKey]) : frozen;
+    const fresh = buildPlan({ items, today: new Date(), dailyBudgetHours: budgetHours, frozen: skip, reserved });
+    setRerouted(true);
+    setDraft(fresh.blocks.filter((b) => itemByKey.has(b.itemKey)));
+  };
+
+  const draftDays = new Set(draft?.map((b) => b.date) ?? []).size;
+  const draftDelta = draft
+    ? draft.reduce((a, b) => a + b.minutes, 0) - confirmed.filter(replaceable).reduce((a, b) => a + b.minutes, 0)
+    : 0;
 
   const confirm = async () => {
     if (!draft) return;
@@ -174,20 +204,35 @@ export default function PlannerTab({
         {draft === null ? (
           <>
             <Button onClick={generate} disabled={busy}><Sparkles className="w-4 h-4" />Gerar sugestão</Button>
-            {confirmed.some((b) => b.date >= todayKey) && (
+            {confirmed.some(replaceable) && (
               <Button variant="outline" onClick={adjust} disabled={busy}>Ajustar plano</Button>
             )}
+            <Button variant="outline" onClick={reroute} disabled={busy}><Route className="w-4 h-4" />Recalcular rota</Button>
           </>
         ) : (
           <>
             <Button onClick={confirm} disabled={busy}>Confirmar plano</Button>
             <Button variant="outline" onClick={cancel} disabled={busy}>Cancelar</Button>
             <p className="text-xs text-muted-foreground">
-              Confirmar substitui os blocos futuros desta aba. Dias passados ficam como histórico.
+              Confirmar substitui os blocos futuros desta aba. Dias passados e sessões não realizadas ficam como histórico.
             </p>
           </>
         )}
       </div>
+
+      {draft && rerouted && (
+        <Alert>
+          <AlertTitle>Prévia da nova rota</AlertTitle>
+          <AlertDescription>
+            {missedPending > 0
+              ? `${formatDuration(missedPending / 60)} não realizadas voltam ao total e são redistribuídas. `
+              : "Nenhuma sessão marcada como não realizada. "}
+            {`Nova distribuição: ${draft.length} sessões em ${draftDays} dias`}
+            {draftDelta !== 0 && ` (${draftDelta > 0 ? "+" : "−"}${formatDuration(Math.abs(draftDelta) / 60)} em relação ao plano atual)`}
+            {missedToday && ". Hoje fica livre"}. Revise abaixo e confirme.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         {items.map((item) => {
@@ -274,8 +319,9 @@ export default function PlannerTab({
                     const item = itemByKey.get(e.block.itemKey)!;
                     const doneMin = done.get(`${e.block.itemKey}|${e.block.date}`) ?? 0;
                     const editable = e.draftIndex !== null;
+                    const markable = e.stored && e.block.date <= todayKey;
                     return (
-                      <li key={`${e.block.itemKey}|${e.block.date}`} className="flex items-center gap-3 px-4 py-3">
+                      <li key={e.stored?.id ?? `draft-${e.draftIndex}`} className="flex items-center gap-3 px-4 py-3">
                         <ColorDot color={item.color} />
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium truncate">
@@ -300,6 +346,17 @@ export default function PlannerTab({
                               <X className="w-4 h-4" />
                             </Button>
                           </div>
+                        )}
+                        {markable && e.stored!.status === "missed" && (
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">Não realizado</Badge>
+                            <Button size="sm" variant="ghost" disabled={busy} onClick={() => onSetStatus(e.stored!.id, "planned")}>Desfazer</Button>
+                          </div>
+                        )}
+                        {markable && e.stored!.status === "planned" && doneMin < e.block.minutes && (
+                          <Button size="sm" variant="ghost" disabled={busy} onClick={() => onSetStatus(e.stored!.id, "missed")}>
+                            Não realizado
+                          </Button>
                         )}
                       </li>
                     );

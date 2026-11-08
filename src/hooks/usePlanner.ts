@@ -233,13 +233,23 @@ export function usePlanner() {
     }
   };
 
+  const setBlockStatus = async (blockId: string, status: BlockStatus): Promise<boolean> => {
+    const { error } = await supabase.from("plan_blocks").update({ status }).eq("id", blockId);
+    if (error) {
+      toast.error("Não foi possível atualizar a sessão.");
+      return false;
+    }
+    await load();
+    return true;
+  };
+
   // Insert new blocks first, then delete the old future ones: a failed insert loses nothing.
   const replaceBlocks = async (kind: PlanKind, drafts: PlanBlock[]): Promise<boolean> => {
     if (!user || !data) return false;
     const todayKey = toDayKey(new Date());
     // Reviews and past history stay; only future study blocks are replaced.
     const oldIds = data.blocks
-      .filter((b) => b.kind === kind && b.blockType === "study" && b.date >= todayKey)
+      .filter((b) => b.kind === kind && b.blockType === "study" && b.status === "planned" && b.date >= todayKey)
       .map((b) => b.id);
 
     if (drafts.length > 0) {
@@ -284,5 +294,6 @@ export function usePlanner() {
     done: model?.done ?? new Map<string, number>(),
     saveSettings,
     replaceBlocks,
+    setBlockStatus,
   };
 }

@@ -16,6 +16,7 @@ export default function PlannerPage() {
     limitHours: p.courseBudget,
     maxBlockMinutes: p.maxBlockMinutes,
     onReplace: p.replaceBlocks,
+    onSetStatus: p.setBlockStatus,
   };
 
   return (
