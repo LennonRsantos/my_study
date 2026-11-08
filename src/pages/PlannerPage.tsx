@@ -18,6 +18,7 @@ export default function PlannerPage() {
     maxBlockMinutes: p.maxBlockMinutes,
     onReplace: p.replaceBlocks,
     onSetStatus: p.setBlockStatus,
+    onReschedule: p.rescheduleBlock,
   };
 
   return (

@@ -121,7 +121,12 @@ export function usePlanner() {
     const [c, l, b, ls] = await Promise.all([
       supabase.from("courses").select("id, plan_deadline, plan_weekly_hours, plan_days, plan_priority"),
       supabase.from("languages").select("id, plan_deadline, plan_weekly_hours, plan_days, plan_priority"),
-      supabase.from("plan_blocks").select("*").gte("date", weekStart).order("date"),
+      // This week onward, plus pending reviews of any date so overdue ones still show.
+      supabase
+        .from("plan_blocks")
+        .select("*")
+        .or(`date.gte.${weekStart},and(block_type.eq.review,status.eq.planned)`)
+        .order("date"),
       fetchLanguageSessions(user.id),
     ]);
     if (c.error || l.error || b.error || !ls) {
@@ -243,6 +248,16 @@ export function usePlanner() {
     return true;
   };
 
+  const rescheduleBlock = async (blockId: string, date: string): Promise<boolean> => {
+    const { error } = await supabase.from("plan_blocks").update({ date }).eq("id", blockId);
+    if (error) {
+      toast.error("Não foi possível reagendar.");
+      return false;
+    }
+    await load();
+    return true;
+  };
+
   // Insert new blocks first, then delete the old future ones: a failed insert loses nothing.
   const replaceBlocks = async (kind: PlanKind, drafts: PlanBlock[]): Promise<boolean> => {
     if (!user || !data) return false;
@@ -295,6 +310,7 @@ export function usePlanner() {
     saveSettings,
     replaceBlocks,
     setBlockStatus,
+    rescheduleBlock,
     activeCourses: active,
   };
 }

@@ -10,6 +10,7 @@ import StatRow from "@/components/page/StatRow";
 import EmptyState from "@/components/page/EmptyState";
 import { ColorAvatar, ColorDot, ListCard } from "@/components/page/bits";
 import PlanSettingsDialog from "./PlanSettingsDialog";
+import ReviewList from "./ReviewList";
 import { formatDuration, formatHours } from "@/lib/format";
 import { buildPlan, overloadedDays, splitBlock, type PlanBlock, type PlanKind, type PlanRow, type PlanSettings, type PlanStatus } from "@/lib/planner";
 import { toDayKey } from "@/lib/streak";
@@ -40,6 +41,7 @@ interface PlannerTabProps {
   onSaveSettings: (item: PlannerItem, s: PlanSettings, workloadHours?: number) => Promise<boolean>;
   onReplace: (kind: PlanKind, drafts: PlanBlock[]) => Promise<boolean>;
   onSetStatus: (blockId: string, status: BlockStatus) => Promise<boolean>;
+  onReschedule: (blockId: string, date: string) => Promise<boolean>;
 }
 
 interface AgendaEntry {
@@ -51,7 +53,7 @@ interface AgendaEntry {
 }
 
 export default function PlannerTab({
-  kind, items, budgetHours, frozen, blocks, done, reserved, limitHours, maxBlockMinutes, emptyText, onSaveSettings, onReplace, onSetStatus,
+  kind, items, budgetHours, frozen, blocks, done, reserved, limitHours, maxBlockMinutes, emptyText, onSaveSettings, onReplace, onSetStatus, onReschedule,
 }: PlannerTabProps) {
   const [draft, setDraft] = useState<PlanBlock[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -87,6 +89,7 @@ export default function PlannerTab({
   const missedPending = confirmed
     .filter((b) => b.status === "missed")
     .reduce((a, b) => a + Math.max(0, b.minutes - (done.get(`${b.itemKey}|${b.date}`) ?? 0)), 0);
+  const pendingReviews = blocks.filter((b) => b.kind === kind && b.blockType === "review" && b.status === "planned");
   const missedToday = confirmed.some((b) => b.status === "missed" && b.date === todayKey);
 
   const weekStart = toDayKey(startOfWeek(today, { weekStartsOn: 1 }));
@@ -101,7 +104,7 @@ export default function PlannerTab({
   const overloaded = overloadedDays(
     [
       ...agenda.filter((e) => e.block.date >= todayKey).map((e) => e.block),
-      ...blocks.filter((b) => b.kind !== kind && b.date >= todayKey && b.status === "planned"),
+      ...blocks.filter((b) => (b.kind !== kind || b.blockType === "review") && b.date >= todayKey && b.status === "planned"),
     ],
     limitHours * 60,
   );
@@ -298,6 +301,10 @@ export default function PlannerTab({
           );
         })}
       </div>
+
+      {pendingReviews.length > 0 && (
+        <ReviewList reviews={pendingReviews} todayKey={todayKey} onSetStatus={onSetStatus} onReschedule={onReschedule} />
+      )}
 
       <section aria-labelledby="planner-agenda" className="space-y-3">
         <h2 id="planner-agenda" className="font-display text-lg font-semibold tracking-tight">Próximos dias</h2>

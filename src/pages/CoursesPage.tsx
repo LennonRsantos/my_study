@@ -27,6 +27,7 @@ import { CourseModules } from "@/components/CourseModules";
 import { useCourseModules, moduleStats, type CourseModule } from "@/hooks/useCourseModules";
 import { useCourses, type Course } from "@/hooks/useCourses";
 import type { ImportedModule } from "@/lib/courseImport";
+import { syncReviews } from "@/lib/reviews";
 
 
 export default function CoursesPage() {
@@ -41,6 +42,14 @@ export default function CoursesPage() {
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
 
   // Study and practice sessions linked to a course count as time spent on it
+  // Spaced reviews follow completion: scheduled when a module or course finishes, removed when reopened.
+  const reviews = async (courseId: string, moduleId: string | null, name: string, completed: boolean) => {
+    if (!user) return;
+    const ok = await syncReviews(user.id, courseId, moduleId, name, completed);
+    if (!ok) toast.error("Não foi possível atualizar as revisões");
+    else if (completed) toast.info(`Revisões de "${name}" agendadas para daqui a 3, 7 e 21 dias`);
+  };
+
   const sessionHoursFor = (courseId: string) =>
     [...sessions, ...practiceSessions].filter((s) => s.courseId === courseId).reduce((sum, s) => sum + s.hours, 0);
 
@@ -63,6 +72,7 @@ export default function CoursesPage() {
       await supabase.from("courses").insert({ id: courseId, user_id: user.id, ...payload });
       if (data.subjectIds.length > 0) await supabase.from("course_subjects").insert(data.subjectIds.map((sid) => ({ course_id: courseId, subject_id: sid })));
     }
+    if (data.completed !== !!editing?.completed) await reviews(courseId, null, data.name, data.completed);
     await setItemCategories(courseId, "course", categoryIds);
     toast.success(id ? "Curso salvo" : "Curso criado");
     setDialogOpen(false);
@@ -80,6 +90,7 @@ export default function CoursesPage() {
     const completed = !course.completed;
     await supabase.from("courses").update({ completed, completed_at: completed ? new Date().toISOString() : null }).eq("id", course.id);
     toast.success(completed ? "Curso concluído" : "Curso reaberto");
+    await reviews(course.id, null, course.name, completed);
     fetchCourses();
   };
 
@@ -88,6 +99,7 @@ export default function CoursesPage() {
     const course = courses.find((c) => c.id === courseId);
     if (!course?.completed) return;
     await supabase.from("courses").update({ completed: false, completed_at: null }).eq("id", courseId);
+    await reviews(courseId, null, course.name, false);
     toast.info(`Curso "${course.name}" reaberto: há módulos pendentes`);
     fetchCourses();
   };
@@ -100,6 +112,7 @@ export default function CoursesPage() {
   const handleToggleModule = async (id: string) => {
     const wasCompleted = modules.find((m) => m.id === id);
     await toggleModuleComplete(id);
+    if (wasCompleted) await reviews(wasCompleted.course_id, id, wasCompleted.name, !wasCompleted.completed);
     if (wasCompleted?.completed) await reopenIfCompleted(wasCompleted.course_id);
   };
 
@@ -107,6 +120,9 @@ export default function CoursesPage() {
     const mod = modules.find((m) => m.id === moduleId);
     const wasDone = mod?.lessons?.find((l) => l.id === lessonId)?.completed;
     await toggleLesson(moduleId, lessonId);
+    // The module follows its lessons; schedule or drop its reviews when that flips.
+    const willBeDone = !!mod?.lessons?.length && mod.lessons.every((l) => (l.id === lessonId ? !wasDone : l.completed));
+    if (mod && willBeDone !== mod.completed) await reviews(mod.course_id, mod.id, mod.name, willBeDone);
     if (mod && wasDone) await reopenIfCompleted(mod.course_id);
   };
 
@@ -144,6 +160,7 @@ export default function CoursesPage() {
       if (reason) {
         await supabase.from("courses").update({ completed: true, completed_at: new Date().toISOString() }).eq("id", course.id);
         toast.success(`Curso "${course.name}" concluído: ${reason}`);
+        await reviews(course.id, null, course.name, true);
         fetchCourses();
       }
     });
