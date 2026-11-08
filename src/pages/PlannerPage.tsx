@@ -3,6 +3,7 @@ import PageHeader from "@/components/page/PageHeader";
 import { LoadingState } from "@/components/page/bits";
 import PlannerTab from "@/components/planner/PlannerTab";
 import PlannerLimitsDialog from "@/components/planner/PlannerLimitsDialog";
+import FiveMinuteDialog from "@/components/planner/FiveMinuteDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePlanner } from "@/hooks/usePlanner";
 
@@ -32,12 +33,15 @@ export default function PlannerPage() {
               <TabsTrigger value="cursos">Cursos</TabsTrigger>
               <TabsTrigger value="idiomas">Idiomas</TabsTrigger>
             </TabsList>
-            <PlannerLimitsDialog
-              dailyLimitHours={p.dailyLimitHours}
-              maxBlockMinutes={p.maxBlockMinutes}
-              goalHours={p.goalHours}
-              onSave={p.saveLimits}
-            />
+            <div className="flex flex-wrap gap-2">
+              <FiveMinuteDialog courses={p.activeCourses} />
+              <PlannerLimitsDialog
+                dailyLimitHours={p.dailyLimitHours}
+                maxBlockMinutes={p.maxBlockMinutes}
+                goalHours={p.goalHours}
+                onSave={p.saveLimits}
+              />
+            </div>
           </div>
 
           {/* forceMount keeps an open draft when switching tabs. */}

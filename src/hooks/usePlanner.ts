@@ -295,5 +295,6 @@ export function usePlanner() {
     saveSettings,
     replaceBlocks,
     setBlockStatus,
+    activeCourses: active,
   };
 }
