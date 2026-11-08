@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import { useStudy } from "@/contexts/StudyContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { useStats, HEATMAP_WEEKS } from "@/hooks/useStats";
+import { useStats } from "@/hooks/useStats";
 import { usePracticeStats } from "@/hooks/usePracticeStats";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChartCard from "@/components/dashboard/ChartCard";
@@ -150,7 +150,13 @@ function GeneralDashboard({
         ]}
       />
 
-      <StudyHeatmap days={stats.heatmap} weeks={HEATMAP_WEEKS} />
+      <StudyHeatmap
+        hoursByDay={stats.hoursByDay}
+        frozenSet={stats.frozenSet}
+        firstYear={stats.firstYear}
+        currentStreak={stats.streak}
+        longestStreak={stats.longestStreak}
+      />
 
       <div className="grid gap-6 lg:grid-cols-5">
         <ChartCard

@@ -2,7 +2,7 @@ import { useStudy } from "@/contexts/StudyContext";
 import { useMemo } from "react";
 import {
   startOfWeek, endOfWeek, startOfMonth, endOfMonth,
-  format, subDays, parseISO, eachDayOfInterval,
+  format, subDays, parseISO, eachDayOfInterval, addDays,
 } from "date-fns";
 import {
   buildFrozenSet, computeStreak, countQualifyingDays,
@@ -10,6 +10,52 @@ import {
 } from "@/lib/streak";
 
 export const HEATMAP_WEEKS = 26;
+
+export type HeatDay = { day: string; hours: number; frozen: boolean } | null;
+/** "recent" = last HEATMAP_WEEKS weeks; a number = that calendar year. */
+export type HeatmapPeriod = "recent" | number;
+
+/**
+ * Full Mon–Sun weeks covering the period. Days outside the period or in the future are null,
+ * so the grid keeps its shape.
+ */
+export function buildHeatmap(
+  hoursByDay: Record<string, number>,
+  frozenSet: Set<string>,
+  period: HeatmapPeriod,
+  today: Date,
+): { days: HeatDay[]; weeks: number } {
+  const todayStr = format(today, "yyyy-MM-dd");
+  const from = period === "recent"
+    ? subDays(startOfWeek(today, { weekStartsOn: 1 }), (HEATMAP_WEEKS - 1) * 7)
+    : new Date(period, 0, 1);
+  const to = period === "recent" ? today : new Date(period, 11, 31);
+  const fromStr = format(from, "yyyy-MM-dd");
+  const toStr = format(to, "yyyy-MM-dd");
+  const days = eachDayOfInterval({
+    start: startOfWeek(from, { weekStartsOn: 1 }),
+    end: endOfWeek(to, { weekStartsOn: 1 }),
+  }).map((day) => {
+    const dayStr = format(day, "yyyy-MM-dd");
+    if (dayStr < fromStr || dayStr > toStr || dayStr > todayStr) return null;
+    return { day: dayStr, hours: hoursByDay[dayStr] || 0, frozen: frozenSet.has(dayStr) };
+  });
+  return { days, weeks: days.length / 7 };
+}
+
+/** Longest run of qualifying days (study or frozen) in the whole history. */
+export function longestStreak(hoursByDay: Record<string, number>, frozenSet: Set<string>): number {
+  const keys = [...Object.keys(hoursByDay).filter((k) => hoursByDay[k] > 0), ...frozenSet].sort();
+  if (keys.length === 0) return 0;
+  const qualifies = new Set(keys);
+  let best = 0;
+  let run = 0;
+  for (let d = parseISO(keys[0]); format(d, "yyyy-MM-dd") <= keys[keys.length - 1]; d = addDays(d, 1)) {
+    run = qualifies.has(format(d, "yyyy-MM-dd")) ? run + 1 : 0;
+    best = Math.max(best, run);
+  }
+  return best;
+}
 
 export function useStats() {
   const { sessions, subjects, goal, frozenDays, practiceSessions } = useStudy();
@@ -84,14 +130,8 @@ export function useStats() {
       return { date: format(day, "dd/MM"), day: dayStr, hours: hoursByDay[dayStr] || 0 };
     });
 
-    // Heatmap: HEATMAP_WEEKS full weeks (Mon–Sun) ending with the current week.
-    // Future days of the current week are null so the grid keeps its shape.
-    const heatmapStart = subDays(weekStart, (HEATMAP_WEEKS - 1) * 7);
-    const heatmap = eachDayOfInterval({ start: heatmapStart, end: weekEnd }).map((day) => {
-      const dayStr = format(day, "yyyy-MM-dd");
-      if (dayStr > todayStr) return null;
-      return { day: dayStr, hours: hoursByDay[dayStr] || 0, frozen: frozenSet.has(dayStr) };
-    });
+    const firstDay = [...Object.keys(hoursByDay), ...frozenSet].filter((d) => d <= todayStr).sort()[0];
+    const firstYear = firstDay ? Number(firstDay.slice(0, 4)) : today.getFullYear();
 
     // Current week, Mon–Sun
     const weekStrip = eachDayOfInterval({ start: weekStart, end: weekEnd }).map((day) => {
@@ -139,7 +179,10 @@ export function useStats() {
       subjectRanking,
       weekdayHours,
       dailyEvolution,
-      heatmap,
+      hoursByDay,
+      frozenSet,
+      firstYear,
+      longestStreak: longestStreak(hoursByDay, frozenSet),
       weekStrip,
       streak,
       avgHoursPerDay,

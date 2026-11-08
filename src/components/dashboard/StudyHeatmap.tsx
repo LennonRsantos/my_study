@@ -3,9 +3,9 @@ import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { formatDayShort, formatDuration, formatHours } from "@/lib/format";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { buildHeatmap, HEATMAP_WEEKS, type HeatmapPeriod } from "@/hooks/useStats";
 import ChartCard from "./ChartCard";
-
-type HeatDay = { day: string; hours: number; frozen: boolean } | null;
 
 // One hue, light -> dark (sequential). Level 0 is the empty track.
 const LEVEL_CLASS = ["bg-muted", "bg-primary/25", "bg-primary/50", "bg-primary/75", "bg-primary"];
@@ -27,35 +27,48 @@ function levelOf(hours: number, t: number[]): number {
   return 4;
 }
 
-export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: number }) {
-  const lastIndex = days.reduce((acc, d, i) => (d ? i : acc), 0);
-  const [active, setActive] = useState<number | null>(null);
+interface StudyHeatmapProps {
+  hoursByDay: Record<string, number>;
+  frozenSet: Set<string>;
+  firstYear: number;
+  currentStreak: number;
+  longestStreak: number;
+}
 
-  const { levels, studiedDays, totalHours, longestRun, bestDay, monthLabels, monthTable } = useMemo(() => {
+export default function StudyHeatmap({ hoursByDay, frozenSet, firstYear, currentStreak, longestStreak }: StudyHeatmapProps) {
+  const [period, setPeriod] = useState<HeatmapPeriod>("recent");
+  const { days, weeks } = useMemo(() => buildHeatmap(hoursByDay, frozenSet, period, new Date()), [hoursByDay, frozenSet, period]);
+  const firstIndex = days.findIndex(Boolean);
+  const lastIndex = days.reduce((acc, d, i) => (d ? i : acc), 0);
+  const [hovered, setHovered] = useState<number | null>(null);
+  // A click pins the day so touch users can read it; hover and arrows move freely.
+  const [pinned, setPinned] = useState<number | null>(null);
+  const active = hovered ?? pinned;
+  const setActive = setHovered;
+  const thisYear = new Date().getFullYear();
+  const years = Array.from({ length: Math.max(1, thisYear - firstYear + 1) }, (_, i) => thisYear - i);
+
+  const { levels, studiedDays, totalHours, bestDay, monthLabels, monthTable } = useMemo(() => {
     const t = thresholds(days.map((d) => d?.hours ?? 0));
     const levels = days.map((d) => (d ? levelOf(d.hours, t) : -1));
 
-    let run = 0;
-    let longestRun = 0;
     let bestDay: { day: string; hours: number } | null = null;
     let studiedDays = 0;
     let totalHours = 0;
     for (const d of days) {
       if (!d) continue;
-      const qualifies = d.hours > 0 || d.frozen;
-      run = qualifies ? run + 1 : 0;
-      longestRun = Math.max(longestRun, run);
       if (d.hours > 0) studiedDays++;
       totalHours += d.hours;
       if (d.hours > 0 && (!bestDay || d.hours > bestDay.hours)) bestDay = { day: d.day, hours: d.hours };
     }
 
-    // A month label sits over the first week column whose Monday falls in a new month
+    // A month label sits over the first week column whose first shown day falls in a new month
+    const firstOfWeek = (w: number) => days.slice(w * 7, w * 7 + 7).find(Boolean) ?? null;
     const monthLabels: { col: number; label: string }[] = [];
     for (let w = 0; w < weeks; w++) {
-      const first = days[w * 7];
+      const first = firstOfWeek(w);
       const month = first ? first.day.slice(0, 7) : null;
-      const prev = w > 0 ? days[(w - 1) * 7]?.day.slice(0, 7) : null;
+      const prev = w > 0 ? firstOfWeek(w - 1)?.day.slice(0, 7) : null;
       if (month && month !== prev) {
         monthLabels.push({ col: w, label: format(parseISO(first!.day), "MMM", { locale: ptBR }) });
       }
@@ -76,7 +89,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
       m.days,
     ]);
 
-    return { levels, studiedDays, totalHours, longestRun, bestDay, monthLabels, monthTable };
+    return { levels, studiedDays, totalHours, bestDay, monthLabels, monthTable };
   }, [days, weeks]);
 
   const focused = active !== null ? days[active] : null;
@@ -86,7 +99,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
     if (!(e.key in step)) return;
     e.preventDefault();
     const from = active ?? lastIndex;
-    const next = Math.min(Math.max(from + step[e.key], 0), lastIndex);
+    const next = Math.min(Math.max(from + step[e.key], firstIndex), lastIndex);
     setActive(next);
   };
 
@@ -95,7 +108,16 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
   return (
     <ChartCard
       title="Mapa de estudo"
-      description={`Últimas ${weeks} semanas. Cada quadrado é um dia; quanto mais escuro, mais horas.`}
+      description={`${period === "recent" ? `Últimas ${HEATMAP_WEEKS} semanas` : `Ano de ${period}`}. Cada quadrado é um dia; quanto mais escuro, mais horas.`}
+      action={
+        <Select value={String(period)} onValueChange={(v) => { setPinned(null); setPeriod(v === "recent" ? "recent" : Number(v)); }}>
+          <SelectTrigger className="h-8 w-44" aria-label="Período do mapa"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="recent">Últimas {HEATMAP_WEEKS} semanas</SelectItem>
+            {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      }
       table={{
         caption: "Horas estudadas por mês no período do mapa",
         columns: ["Mês", "Horas", "Dias com estudo"],
@@ -128,7 +150,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
             <div
               role="img"
               tabIndex={0}
-              aria-label={`Mapa de estudo: ${studiedDays} dias com estudo e ${formatHours(totalHours)} nas últimas ${weeks} semanas. Use as setas para percorrer os dias.`}
+              aria-label={`Mapa de estudo: ${studiedDays} dias com estudo e ${formatHours(totalHours)} no período. Use as setas para percorrer os dias.`}
               onKeyDown={onKeyDown}
               onBlur={() => setActive(null)}
               onMouseLeave={() => setActive(null)}
@@ -139,6 +161,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
                 <span
                   key={i}
                   onMouseEnter={() => d && setActive(i)}
+                  onClick={() => d && setPinned((p) => (p === i ? null : i))}
                   className={cn(
                     "aspect-square rounded-[3px]",
                     d ? LEVEL_CLASS[levels[i]] : "bg-transparent",
@@ -156,7 +179,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
                 ? `${formatDayShort(parseISO(focused.day))}: ${
                     focused.hours > 0 ? formatDuration(focused.hours) : focused.frozen ? "dia congelado" : "sem estudo"
                   }`
-                : "Passe o mouse ou use as setas para ver cada dia"}
+                : "Passe o mouse, toque ou use as setas para ver cada dia"}
             </p>
             <div className="flex items-center gap-4" aria-hidden>
               <span className="flex items-center gap-1.5">
@@ -174,7 +197,7 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
           </div>
         </div>
 
-        <dl className="grid grid-cols-3 gap-4 border-t pt-5 xl:w-48 xl:grid-cols-1 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
+        <dl className="grid grid-cols-2 gap-4 border-t pt-5 sm:grid-cols-4 xl:w-48 xl:grid-cols-1 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
           <div>
             <dt className="text-xs text-muted-foreground">Dias com estudo</dt>
             <dd className="mt-0.5 font-display text-xl font-semibold">
@@ -183,10 +206,17 @@ export default function StudyHeatmap({ days, weeks }: { days: HeatDay[]; weeks: 
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">Maior sequência</dt>
+            <dt className="text-xs text-muted-foreground">Sequência atual</dt>
             <dd className="mt-0.5 font-display text-xl font-semibold">
-              {longestRun}
-              <span className="ml-1 text-sm font-normal text-muted-foreground">{longestRun === 1 ? "dia" : "dias"}</span>
+              {currentStreak}
+              <span className="ml-1 text-sm font-normal text-muted-foreground">{currentStreak === 1 ? "dia" : "dias"}</span>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Maior sequência histórica</dt>
+            <dd className="mt-0.5 font-display text-xl font-semibold">
+              {longestStreak}
+              <span className="ml-1 text-sm font-normal text-muted-foreground">{longestStreak === 1 ? "dia" : "dias"}</span>
             </dd>
           </div>
           <div>
