@@ -3,7 +3,7 @@ import { Subject, StudySession, DailyGoal, Goal, FrozenDay, PracticeSession } fr
 import {
   getSubjects, saveSubject, deleteSubjectDb,
   getSessions, saveSession, deleteSessionDb,
-  getGoal, saveGoal,
+  getGoal, saveGoal, DEFAULT_GOAL,
   getGoals, saveGoalDb, deleteGoalDb,
   getFrozenDays, saveFrozenDay, deleteFrozenDayDb,
   getPracticeSessions, savePracticeSession, deletePracticeSessionDb,
@@ -47,7 +47,7 @@ export function useStudy() {
 export function StudyProvider({ children }: { children: ReactNode }) {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
-  const [goal, setGoalState] = useState<DailyGoal>({ hoursPerDay: 4 });
+  const [goal, setGoalState] = useState<DailyGoal>(DEFAULT_GOAL);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [frozenDays, setFrozenDays] = useState<FrozenDay[]>([]);
   const [practiceSessions, setPracticeSessions] = useState<PracticeSession[]>([]);

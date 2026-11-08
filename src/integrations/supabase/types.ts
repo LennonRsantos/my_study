@@ -279,6 +279,8 @@ export type Database = {
           created_at: string
           hours_per_day: number
           id: string
+          plan_daily_limit_hours: number | null
+          plan_max_block_minutes: number
           updated_at: string
           user_id: string | null
         }
@@ -286,6 +288,8 @@ export type Database = {
           created_at?: string
           hours_per_day?: number
           id?: string
+          plan_daily_limit_hours?: number | null
+          plan_max_block_minutes?: number
           updated_at?: string
           user_id?: string | null
         }
@@ -293,6 +297,8 @@ export type Database = {
           created_at?: string
           hours_per_day?: number
           id?: string
+          plan_daily_limit_hours?: number | null
+          plan_max_block_minutes?: number
           updated_at?: string
           user_id?: string | null
         }
@@ -745,8 +751,12 @@ export type Database = {
           date: string
           id: string
           label: string | null
+          block_type: string
           language_id: string | null
+          module_id: string | null
           planned_minutes: number
+          review_step: number | null
+          status: string
           user_id: string
         }
         Insert: {
@@ -755,8 +765,12 @@ export type Database = {
           date: string
           id?: string
           label?: string | null
+          block_type?: string
           language_id?: string | null
+          module_id?: string | null
           planned_minutes: number
+          review_step?: number | null
+          status?: string
           user_id: string
         }
         Update: {
@@ -765,8 +779,12 @@ export type Database = {
           date?: string
           id?: string
           label?: string | null
+          block_type?: string
           language_id?: string | null
+          module_id?: string | null
           planned_minutes?: number
+          review_step?: number | null
+          status?: string
           user_id?: string
         }
         Relationships: [

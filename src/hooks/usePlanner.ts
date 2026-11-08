@@ -18,6 +18,8 @@ import {
 
 export interface PlannerItem extends PlanItem {
   id: string;
+  /** Editable course workload (courses.target_hours); undefined when module durations define the total. */
+  workloadHours?: number;
 }
 
 export interface StoredBlock {
@@ -27,7 +29,14 @@ export interface StoredBlock {
   date: string;
   minutes: number;
   label: string | null;
+  status: BlockStatus;
+  blockType: BlockType;
+  moduleId: string | null;
+  reviewStep: number | null;
 }
+
+export type BlockStatus = "planned" | "missed" | "done";
+export type BlockType = "study" | "review";
 
 interface SettingsRow {
   id: string;
@@ -44,6 +53,10 @@ interface BlockRow {
   date: string;
   planned_minutes: number;
   label: string | null;
+  status: string;
+  block_type: string;
+  module_id: string | null;
+  review_step: number | null;
 }
 
 interface LoadedData {
@@ -71,7 +84,10 @@ function toSettings(r: SettingsRow | undefined): PlanSettings {
 function toStoredBlock(r: BlockRow): StoredBlock {
   const kind: PlanKind = r.course_id ? "course" : "language";
   const id = (r.course_id ?? r.language_id) as string;
-  return { id: r.id, kind, itemKey: `${kind}:${id}`, date: r.date, minutes: r.planned_minutes, label: r.label };
+  return {
+    id: r.id, kind, itemKey: `${kind}:${id}`, date: r.date, minutes: r.planned_minutes, label: r.label,
+    status: r.status as BlockStatus, blockType: r.block_type as BlockType, moduleId: r.module_id, reviewStep: r.review_step,
+  };
 }
 
 // PostgREST caps each response at 1000 rows; page through all language sessions.
@@ -94,8 +110,8 @@ async function fetchLanguageSessions(userId: string): Promise<LoadedData["langSe
 
 export function usePlanner() {
   const { user } = useAuth();
-  const { sessions, practiceSessions, frozenDays, goal } = useStudy();
-  const { active, loading: coursesLoading } = useCourseInsights();
+  const { sessions, practiceSessions, frozenDays, goal, setGoal } = useStudy();
+  const { active, loading: coursesLoading, refresh: refreshCourses } = useCourseInsights();
   const { languages, loading: languagesLoading } = useLanguages();
   const [data, setData] = useState<LoadedData | null>(null);
 
@@ -144,6 +160,7 @@ export function usePlanner() {
       // Unknown total (no target, no module durations) stays null.
       remainingHours: i.totalHours > 0 ? Math.max(0, i.totalHours - i.dedicatedHours) : null,
       paceHours: i.pacePerWeek,
+      workloadHours: i.source === "modules" ? undefined : i.course.targetHours,
       modules: i.source === "modules"
         ? i.modules
             .filter((m) => !m.completed && (m.duration_minutes ?? 0) > 0)
@@ -177,12 +194,18 @@ export function usePlanner() {
       done,
       frozen: buildFrozenSet(frozenDays),
       blocks: data.blocks,
-      courseBudget: goal.hoursPerDay,
+      courseBudget: goal.dailyLimitHours ?? goal.hoursPerDay,
+      // Pending reviews take their minutes from the day before the planner splits it.
+      reserved: data.blocks
+        .filter((b) => b.blockType === "review" && b.status === "planned")
+        .reduce((m, b) => m.set(b.date, (m.get(b.date) ?? 0) + b.minutes), new Map<string, number>()),
     };
   }, [data, active, languages, sessions, practiceSessions, frozenDays, goal]);
 
-  const saveSettings = async (kind: PlanKind, id: string, s: PlanSettings): Promise<boolean> => {
+  // totalHours: course workload; undefined leaves courses.target_hours untouched.
+  const saveSettings = async (kind: PlanKind, id: string, s: PlanSettings, totalHours?: number): Promise<boolean> => {
     const patch = {
+      ...(kind === "course" && totalHours !== undefined ? { target_hours: totalHours } : {}),
       plan_deadline: s.deadline,
       plan_weekly_hours: s.weeklyHours && s.weeklyHours > 0 ? s.weeklyHours : null,
       plan_days: s.days?.length ? s.days : null,
@@ -196,14 +219,28 @@ export function usePlanner() {
       return false;
     }
     await load();
+    if (totalHours !== undefined) await refreshCourses();
     return true;
+  };
+
+  const saveLimits = async (dailyLimitHours: number | null, maxBlockMinutes: number): Promise<boolean> => {
+    try {
+      await setGoal({ ...goal, dailyLimitHours, maxBlockMinutes });
+      return true;
+    } catch {
+      toast.error("Não foi possível salvar os limites.");
+      return false;
+    }
   };
 
   // Insert new blocks first, then delete the old future ones: a failed insert loses nothing.
   const replaceBlocks = async (kind: PlanKind, drafts: PlanBlock[]): Promise<boolean> => {
     if (!user || !data) return false;
     const todayKey = toDayKey(new Date());
-    const oldIds = data.blocks.filter((b) => b.kind === kind && b.date >= todayKey).map((b) => b.id);
+    // Reviews and past history stay; only future study blocks are replaced.
+    const oldIds = data.blocks
+      .filter((b) => b.kind === kind && b.blockType === "study" && b.date >= todayKey)
+      .map((b) => b.id);
 
     if (drafts.length > 0) {
       const rows = drafts.map((d) => {
@@ -236,6 +273,11 @@ export function usePlanner() {
     courseItems: model?.courseItems ?? [],
     languageItems: model?.languageItems ?? [],
     courseBudget: model?.courseBudget ?? 0,
+    reserved: model?.reserved ?? new Map<string, number>(),
+    maxBlockMinutes: goal.maxBlockMinutes,
+    dailyLimitHours: goal.dailyLimitHours,
+    goalHours: goal.hoursPerDay,
+    saveLimits,
     languageBudget: Infinity, // languages are not capped by the daily goal
     frozen: model?.frozen ?? new Set<string>(),
     blocks: model?.blocks ?? [],

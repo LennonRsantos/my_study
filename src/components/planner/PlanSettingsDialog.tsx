@@ -23,15 +23,18 @@ const PRIORITY_LABEL: Record<PlanPriority, string> = { 2: "Alta", 1: "Normal", 0
 interface PlanSettingsDialogProps {
   name: string;
   initial: PlanSettings;
-  onSave: (s: PlanSettings) => Promise<boolean>;
+  /** Course workload in hours; undefined hides the field (total comes from modules). */
+  workloadHours?: number;
+  onSave: (s: PlanSettings, workloadHours?: number) => Promise<boolean>;
 }
 
-export default function PlanSettingsDialog({ name, initial, onSave }: PlanSettingsDialogProps) {
+export default function PlanSettingsDialog({ name, initial, workloadHours, onSave }: PlanSettingsDialogProps) {
   const [open, setOpen] = useState(false);
   const [deadline, setDeadline] = useState(initial.deadline ?? "");
   const [weekly, setWeekly] = useState(initial.weeklyHours ? String(initial.weeklyHours) : "");
   const [days, setDays] = useState<number[]>(initial.days ?? []);
   const [priority, setPriority] = useState<PlanPriority>(initial.priority);
+  const [workload, setWorkload] = useState(workloadHours ? String(workloadHours) : "");
   const [busy, setBusy] = useState(false);
 
   const reset = (o: boolean) => {
@@ -40,12 +43,15 @@ export default function PlanSettingsDialog({ name, initial, onSave }: PlanSettin
       setWeekly(initial.weeklyHours ? String(initial.weeklyHours) : "");
       setDays(initial.days ?? []);
       setPriority(initial.priority);
+      setWorkload(workloadHours ? String(workloadHours) : "");
     }
     setOpen(o);
   };
 
   const weeklyNum = Number(weekly);
   const weeklyInvalid = weekly !== "" && (!Number.isFinite(weeklyNum) || weeklyNum < 0);
+  const workloadNum = Number(workload);
+  const workloadInvalid = workload !== "" && (!Number.isFinite(workloadNum) || workloadNum < 0);
 
   const submit = async () => {
     setBusy(true);
@@ -54,7 +60,7 @@ export default function PlanSettingsDialog({ name, initial, onSave }: PlanSettin
       weeklyHours: weekly !== "" && weeklyNum > 0 ? weeklyNum : null,
       days: days.length > 0 ? [...days].sort((a, b) => a - b) : null,
       priority,
-    });
+    }, workloadHours === undefined ? undefined : workload === "" ? 0 : workloadNum);
     setBusy(false);
     if (ok) setOpen(false);
   };
@@ -69,10 +75,27 @@ export default function PlanSettingsDialog({ name, initial, onSave }: PlanSettin
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Plano de {name}</DialogTitle>
-          <DialogDescription>Defina prazo ou meta semanal. A meta semanal, se informada, tem prioridade sobre o prazo.</DialogDescription>
+          <DialogDescription>Defina prazo ou meta semanal. A meta semanal, se informada, tem prioridade sobre o prazo. Sem nenhum dos dois, o curso divide o tempo livre do dia com os outros.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          {workloadHours !== undefined && (
+            <div>
+              <Label htmlFor="plan-workload">Carga horária total (h)</Label>
+              <Input
+                id="plan-workload"
+                type="number"
+                min={0}
+                step={0.5}
+                inputMode="decimal"
+                placeholder="ex.: 40"
+                value={workload}
+                onChange={(e) => setWorkload(e.target.value)}
+                aria-invalid={workloadInvalid}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">O restante desconta o tempo já estudado.</p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label htmlFor="plan-deadline">Prazo (data final)</Label>
@@ -115,13 +138,13 @@ export default function PlanSettingsDialog({ name, initial, onSave }: PlanSettin
                 ))}
               </SelectContent>
             </Select>
-            <p className="mt-1 text-xs text-muted-foreground">Prioridade alta ocupa o tempo diário antes das outras.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Prioridade alta ocupa o tempo diário antes e recebe parte maior na divisão.</p>
           </div>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
-          <Button onClick={submit} disabled={busy || weeklyInvalid}>Salvar plano</Button>
+          <Button onClick={submit} disabled={busy || weeklyInvalid || workloadInvalid}>Salvar plano</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

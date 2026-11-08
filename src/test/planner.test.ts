@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { addDays, getISODay } from "date-fns";
-import { buildPlan, doneMinutes, type PlanItem, type PlanBlock } from "@/lib/planner";
+import { buildPlan, doneMinutes, overloadedDays, splitBlock, type PlanItem, type PlanBlock } from "@/lib/planner";
 import { toDayKey } from "@/lib/streak";
 
 // 2026-11-09 is a Monday (local time).
@@ -22,12 +22,13 @@ function item(over: Partial<PlanItem> = {}): PlanItem {
   };
 }
 
-function plan(items: PlanItem[], extra: { budget?: number; frozen?: string[] } = {}) {
+function plan(items: PlanItem[], extra: { budget?: number; frozen?: string[]; reserved?: Map<string, number> } = {}) {
   return buildPlan({
     items,
     today: TODAY,
     dailyBudgetHours: extra.budget ?? Infinity,
     frozen: new Set(extra.frozen ?? []),
+    reserved: extra.reserved,
   });
 }
 
@@ -147,5 +148,89 @@ describe("doneMinutes", () => {
     ]);
     expect(map.get("course:a|2026-11-09")).toBe(45);
     expect(map.get("course:b|2026-11-09")).toBe(60);
+  });
+});
+
+describe("buildPlan: deadline feasibility", () => {
+  it("plans 40 h in 30 days at 80 min/day within a 2 h limit", () => {
+    const { rows, blocks } = plan([item({ remainingHours: 40, deadline: toDayKey(addDays(TODAY, 29)) })], { budget: 2 });
+    expect(rows[0].dailyMinutes).toBe(80);
+    expect(rows[0].feasible).toBe(true);
+    expect(blocks.every((b) => b.minutes <= 120)).toBe(true);
+  });
+
+  it("flags 40 h in 10 days with a 2 h limit and suggests day 20 or 4 h/day", () => {
+    const { rows } = plan([item({ remainingHours: 40, deadline: toDayKey(addDays(TODAY, 9)) })], { budget: 2 });
+    expect(rows[0].feasible).toBe(false);
+    expect(toDayKey(rows[0].suggestion!.minDeadline!)).toBe(toDayKey(addDays(TODAY, 19)));
+    expect(rows[0].suggestion!.neededDailyHours).toBeCloseTo(4, 5);
+  });
+});
+
+describe("buildPlan: sharing the daily limit", () => {
+  it("splits free time by priority among courses without a goal", () => {
+    const { rows, blocks } = plan(
+      [
+        item({ key: "course:a", name: "A", remainingHours: 50, priority: 1 }),
+        item({ key: "course:b", name: "B", remainingHours: 50, priority: 2 }),
+      ],
+      { budget: 2 },
+    );
+    const day = blocks.filter((b) => b.date === "2026-11-09");
+    expect(sumMin(day)).toBe(120);
+    const a = rows.find((r) => r.key === "course:a")!;
+    const b = rows.find((r) => r.key === "course:b")!;
+    expect(b.dailyMinutes).toBeGreaterThan(a.dailyMinutes);
+    expect(a.mode).toBe("share");
+    expect(a.eta).not.toBeNull();
+  });
+
+  it("gives a finished course's share to the others", () => {
+    const { blocks } = plan(
+      [
+        item({ key: "course:a", name: "A", remainingHours: 1 }),
+        item({ key: "course:b", name: "B", remainingHours: 50 }),
+      ],
+      { budget: 2 },
+    );
+    const last = blocks.filter((b) => b.date === "2026-11-12");
+    expect(last.map((b) => [b.itemKey, b.minutes])).toEqual([["course:b", 120]]);
+  });
+
+  it("gives deadline items the budget first and shares the rest", () => {
+    const { blocks } = plan(
+      [
+        item({ key: "course:a", name: "A", remainingHours: 10, deadline: "2026-11-18" }),
+        item({ key: "course:b", name: "B", remainingHours: 50 }),
+      ],
+      { budget: 2 },
+    );
+    const day = blocks.filter((b) => b.date === "2026-11-09");
+    expect(day.find((b) => b.itemKey === "course:a")!.minutes).toBe(60);
+    expect(day.find((b) => b.itemKey === "course:b")!.minutes).toBe(60);
+  });
+
+  it("subtracts reserved minutes from the day", () => {
+    const { blocks } = plan([item({ remainingHours: 50 })], { budget: 2, reserved: new Map([["2026-11-09", 30]]) });
+    expect(blocks.find((b) => b.date === "2026-11-09")!.minutes).toBe(90);
+  });
+});
+
+describe("fatigue helpers", () => {
+  it("splits a long block with a break", () => {
+    expect(splitBlock(120, 90)).toEqual({ parts: [60, 60], breakMinutes: 10 });
+    expect(splitBlock(45, 90)).toEqual({ parts: [45], breakMinutes: 0 });
+  });
+
+  it("lists only days above the limit", () => {
+    const over = overloadedDays(
+      [
+        { date: "2026-11-09", minutes: 240 },
+        { date: "2026-11-09", minutes: 120 },
+        { date: "2026-11-10", minutes: 60 },
+      ],
+      240,
+    );
+    expect([...over]).toEqual([["2026-11-09", 360]]);
   });
 });

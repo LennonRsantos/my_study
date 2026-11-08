@@ -11,7 +11,7 @@ import EmptyState from "@/components/page/EmptyState";
 import { ColorAvatar, ColorDot, ListCard } from "@/components/page/bits";
 import PlanSettingsDialog from "./PlanSettingsDialog";
 import { formatDuration, formatHours } from "@/lib/format";
-import { buildPlan, type PlanBlock, type PlanKind, type PlanSettings, type PlanStatus } from "@/lib/planner";
+import { buildPlan, overloadedDays, splitBlock, type PlanBlock, type PlanKind, type PlanRow, type PlanSettings, type PlanStatus } from "@/lib/planner";
 import { toDayKey } from "@/lib/streak";
 import type { PlannerItem, StoredBlock } from "@/hooks/usePlanner";
 
@@ -33,8 +33,11 @@ interface PlannerTabProps {
   frozen: Set<string>;
   blocks: StoredBlock[];
   done: Map<string, number>; // minutes per `${itemKey}|${date}`
+  reserved: Map<string, number>; // minutes per day already taken by reviews
+  limitHours: number; // fatigue limit across all study, for the overload alert
+  maxBlockMinutes: number;
   emptyText: string;
-  onSaveSettings: (item: PlannerItem, s: PlanSettings) => Promise<boolean>;
+  onSaveSettings: (item: PlannerItem, s: PlanSettings, workloadHours?: number) => Promise<boolean>;
   onReplace: (kind: PlanKind, drafts: PlanBlock[]) => Promise<boolean>;
 }
 
@@ -45,7 +48,7 @@ interface AgendaEntry {
 }
 
 export default function PlannerTab({
-  kind, items, budgetHours, frozen, blocks, done, emptyText, onSaveSettings, onReplace,
+  kind, items, budgetHours, frozen, blocks, done, reserved, limitHours, maxBlockMinutes, emptyText, onSaveSettings, onReplace,
 }: PlannerTabProps) {
   const [draft, setDraft] = useState<PlanBlock[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,8 +57,8 @@ export default function PlannerTab({
   const todayKey = toDayKey(today);
 
   const plan = useMemo(
-    () => buildPlan({ items, today: new Date(), dailyBudgetHours: budgetHours, frozen }),
-    [items, budgetHours, frozen],
+    () => buildPlan({ items, today: new Date(), dailyBudgetHours: budgetHours, frozen, reserved }),
+    [items, budgetHours, frozen, reserved],
   );
   const rowByKey = useMemo(() => new Map(plan.rows.map((r) => [r.key, r])), [plan]);
   const itemByKey = useMemo(() => new Map(items.map((i) => [i.key, i])), [items]);
@@ -83,6 +86,15 @@ export default function PlannerTab({
   const doneWeek = weekEntries.reduce((a, e) => a + Math.min(done.get(`${e.block.itemKey}|${e.block.date}`) ?? 0, e.block.minutes), 0);
   const targetWeekly = plan.rows.reduce((a, r) => a + r.targetWeekly, 0);
   const unplacedTotal = plan.rows.filter((r) => r.unplacedHours > 0);
+
+  // Overload counts every planned minute of the day: this tab (draft when open) plus the other tab.
+  const overloaded = overloadedDays(
+    [
+      ...agenda.filter((e) => e.block.date >= todayKey).map((e) => e.block),
+      ...blocks.filter((b) => b.kind !== kind && b.date >= todayKey && b.status === "planned"),
+    ],
+    limitHours * 60,
+  );
 
   // Monday of this week through today + AGENDA_DAYS - 1; only days with entries.
   const lastKey = toDayKey(addDays(today, AGENDA_DAYS - 1));
@@ -133,6 +145,20 @@ export default function PlannerTab({
         ]}
       />
 
+      {overloaded.size > 0 && (
+        <Alert variant="destructive">
+          <AlertTitle>Dia acima do limite</AlertTitle>
+          <AlertDescription className="space-y-1">
+            {[...overloaded].map(([day, min]) => (
+              <p key={day}>
+                Sua programação de {day === todayKey ? "hoje" : format(parseISO(day), "EEEE, d/MM", { locale: ptBR })} possui{" "}
+                {formatDuration(min / 60)} de estudo. Considere dividir essa carga em sessões menores para melhorar a qualidade do aprendizado.
+              </p>
+            ))}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {unplacedTotal.length > 0 && (
         <Alert>
           <AlertTitle>Tempo diário insuficiente</AlertTitle>
@@ -179,19 +205,19 @@ export default function PlannerTab({
                     <h3 className="font-medium truncate">{item.name}</h3>
                     <Badge variant={st.variant}>{st.label}</Badge>
                   </div>
+                  <Recommendation row={r} item={item} />
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    {r.status === "nodata"
-                      ? "Defina prazo ou horas por semana."
-                      : [
-                          r.requiredWeekly != null ? `precisa ${formatHours(r.requiredWeekly)}/sem` : null,
-                          `seu ritmo ${formatHours(item.paceHours)}/sem`,
-                        ].filter(Boolean).join(" · ")}
+                    {[
+                      r.requiredWeekly != null ? `precisa ${formatHours(r.requiredWeekly)}/sem` : null,
+                      `seu ritmo ${formatHours(item.paceHours)}/sem`,
+                    ].filter(Boolean).join(" · ")}
                   </p>
                 </div>
                 <PlanSettingsDialog
                   name={item.name}
                   initial={{ deadline: item.deadline, weeklyHours: item.weeklyHours, days: item.days, priority: item.priority }}
-                  onSave={(s) => onSaveSettings(item, s)}
+                  workloadHours={item.workloadHours}
+                  onSave={(s, w) => onSaveSettings(item, s, w)}
                 />
               </div>
               <dl className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
@@ -203,13 +229,20 @@ export default function PlannerTab({
                     </dd>
                   </div>
                 )}
-                {r.eta && (
+                {item.remainingHours != null && item.remainingHours > 0 && (
                   <div>
-                    <dt className="inline">Previsão: </dt>
-                    <dd className="inline text-foreground">{format(r.eta, "dd/MM/yyyy")}</dd>
+                    <dt className="inline">Restante: </dt>
+                    <dd className="inline text-foreground tabular-nums">{formatHours(item.remainingHours)}</dd>
                   </div>
                 )}
               </dl>
+              {!r.feasible && r.suggestion && (
+                <p className="text-xs text-destructive">
+                  Prazo inviável{Number.isFinite(budgetHours) && ` com ${formatHours(budgetHours)}/dia`}. Sugestão:{" "}
+                  {r.suggestion.minDeadline ? `prazo em ${format(r.suggestion.minDeadline, "dd/MM/yyyy")}` : "um prazo maior"}
+                  {Number.isFinite(r.suggestion.neededDailyHours) && ` ou ${formatDuration(r.suggestion.neededDailyHours)} por dia de estudo`}.
+                </p>
+              )}
               {underGoal && (
                 <p className="text-xs text-destructive">Meta semanal abaixo do necessário para o prazo.</p>
               )}
@@ -252,6 +285,7 @@ export default function PlannerTab({
                           <p className="text-xs text-muted-foreground tabular-nums">
                             planejado {formatDuration(e.block.minutes / 60)} · feito {formatDuration(doneMin / 60)}
                           </p>
+                          {e.block.minutes > maxBlockMinutes && <SplitHint minutes={e.block.minutes} max={maxBlockMinutes} />}
                         </div>
                         {editable && (
                           <div className="flex items-center gap-1">
@@ -277,5 +311,36 @@ export default function PlannerTab({
         )}
       </section>
     </div>
+  );
+}
+
+/** Headline of an item card: minutes per study day and the expected end. */
+function Recommendation({ row, item }: { row: PlanRow; item: PlannerItem }) {
+  if (row.status === "done") return <p className="text-sm">Concluído.</p>;
+  if (item.remainingHours == null) {
+    return <p className="text-sm text-muted-foreground">Informe a carga horária para calcular o tempo por dia.</p>;
+  }
+  if (row.dailyMinutes <= 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {row.mode === "share" ? "Sem tempo livre no limite diário." : "Defina prazo ou horas por semana."}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm">
+      Estude <strong className="tabular-nums">{formatDuration(row.dailyMinutes / 60)}</strong> por dia
+      {item.days?.length ? " de estudo" : ""}
+      {row.eta && <span className="text-muted-foreground"> · termina em {format(row.eta, "dd/MM/yyyy")}</span>}
+    </p>
+  );
+}
+
+function SplitHint({ minutes, max }: { minutes: number; max: number }) {
+  const { parts, breakMinutes } = splitBlock(minutes, max);
+  return (
+    <p className="text-xs text-muted-foreground">
+      Sugestão: {parts.map((p) => `${p} min`).join(" + ")} com pausa de {breakMinutes} min entre as sessões.
+    </p>
   );
 }

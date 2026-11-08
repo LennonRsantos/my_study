@@ -39,13 +39,25 @@ export interface PlanBlock {
   label: string | null;
 }
 
+/** How the scheduled pace was chosen: explicit weekly goal, deadline, share of the free daily time, or none. */
+export type PlanMode = "weekly" | "deadline" | "share" | "none";
+
+export interface PlanSuggestion {
+  minDeadline: Date | null; // earliest date the daily limit allows; null = beyond the scan window
+  neededDailyHours: number; // hours per study day the current deadline would need
+}
+
 export interface PlanRow {
   key: string;
   status: PlanStatus;
+  mode: PlanMode;
   requiredWeekly: number | null; // hours/week needed to meet the deadline
   targetWeekly: number; // hours/week scheduled
+  dailyMinutes: number; // recommended minutes per study day
   eta: Date | null;
   unplacedHours: number; // hours cut by the daily budget
+  feasible: boolean; // false when the deadline cannot be met within the daily limit
+  suggestion: PlanSuggestion | null; // set when not feasible
 }
 
 export interface PlanInput {
@@ -54,12 +66,17 @@ export interface PlanInput {
   dailyBudgetHours: number; // Infinity = no cap
   frozen: Set<string>; // YYYY-MM-DD frozen days (skipped)
   horizonDays?: number;
+  reserved?: Map<string, number>; // dayKey -> minutes already taken (e.g. review blocks)
 }
 
 const STEP = 15; // minutes per block granularity
 const SLOT_LIMIT = 1100; // max days scanned when counting slots to a deadline
 const AHEAD_RATIO = 1.25;
 const UNPLACED_NOISE_HOURS = 0.25;
+const BREAK_MINUTES = 10;
+const PRIORITY_WEIGHT: Record<PlanPriority, number> = { 0: 1, 1: 2, 2: 3 };
+
+const roundStep = (min: number) => Math.round(min / STEP) * STEP;
 
 function compareDeadline(a: string | null, b: string | null): number {
   if (a === b) return 0;
@@ -79,6 +96,18 @@ function countSlots(today: Date, deadline: string, allowed: (iso: number) => boo
   return n;
 }
 
+// First day on which `slots × dailyHours` covers the remaining hours.
+function earliestFinish(today: Date, rem: number, dailyHours: number, allowed: (iso: number) => boolean, frozen: Set<string>): Date | null {
+  let covered = 0;
+  for (let i = 0; i < SLOT_LIMIT; i++) {
+    const d = addDays(today, i);
+    if (!allowed(getISODay(d)) || frozen.has(toDayKey(d))) continue;
+    covered += dailyHours;
+    if (covered >= rem - 1e-9) return d;
+  }
+  return null;
+}
+
 // cum[i] = minutes before module i; cum[last] = total. Returns module index holding pos, or -1.
 function indexAt(cum: number[], pos: number): number {
   for (let i = 0; i < cum.length - 1; i++) if (pos < cum[i + 1]) return i;
@@ -95,94 +124,179 @@ function moduleLabel(mods: PlanModule[], cum: number[], from: number, minutes: n
 }
 
 export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBlock[] } {
-  const { items, today, dailyBudgetHours, frozen, horizonDays = 14 } = input;
+  const { items, today, dailyBudgetHours, frozen, horizonDays = 14, reserved } = input;
   const todayKey = toDayKey(today);
   const horizon = Array.from({ length: horizonDays }, (_, i) => {
     const d = addDays(today, i);
     return { key: toDayKey(d), iso: getISODay(d) };
   });
   const budgetMin = dailyBudgetHours * 60;
-  const used = new Map<string, number>(); // dayKey -> minutes already placed (shared budget)
+  const used = new Map<string, number>(reserved ?? []); // dayKey -> minutes already placed (shared budget)
   const rowsByKey = new Map<string, PlanRow>();
   const blocks: PlanBlock[] = [];
+  const roomOn = (day: string) => Math.max(0, Math.floor((budgetMin - (used.get(day) ?? 0)) / STEP) * STEP);
+
+  const ctx = (it: PlanItem) => {
+    const mods = it.modules?.filter((m) => m.minutes > 0) ?? [];
+    const cum = [0];
+    mods.forEach((m) => cum.push(cum[cum.length - 1] + m.minutes));
+    return {
+      nDays: it.days?.length ? it.days.length : 7,
+      allowed: (iso: number) => !it.days?.length || it.days.includes(iso),
+      mods,
+      cum,
+      // Never plan more than remains (rounded up to a block step).
+      capLeft: it.remainingHours == null ? Infinity : Math.ceil((it.remainingHours * 60) / STEP) * STEP,
+      placedMin: 0,
+    };
+  };
+  type Ctx = ReturnType<typeof ctx>;
+
+  const place = (it: PlanItem, c: Ctx, day: string, minutes: number) => {
+    blocks.push({ itemKey: it.key, date: day, minutes, label: moduleLabel(c.mods, c.cum, c.placedMin, minutes) });
+    used.set(day, (used.get(day) ?? 0) + minutes);
+    c.capLeft -= minutes;
+    c.placedMin += minutes;
+  };
+
+  const statusOf = (it: PlanItem, needed: number | null): PlanStatus => {
+    if (needed == null || needed <= 0) return "nodata";
+    if (it.paceHours >= needed * AHEAD_RATIO) return "ahead";
+    if (it.paceHours >= needed) return "ontrack";
+    return "behind";
+  };
+
+  // Items with an explicit goal or a deadline place first; the rest share what is left of each day.
+  const hasGoal = (it: PlanItem) => (it.weeklyHours != null && it.weeklyHours > 0) || !!it.deadline;
+  const canShare = (it: PlanItem) => Number.isFinite(budgetMin) && it.remainingHours != null && it.remainingHours > 0;
 
   // Highest priority places first; earlier deadline breaks ties; then name.
   const order = [...items].sort(
     (a, b) => b.priority - a.priority || compareDeadline(a.deadline, b.deadline) || a.name.localeCompare(b.name),
   );
 
-  for (const it of order) {
-    const nDays = it.days?.length ? it.days.length : 7;
-    const allowed = (iso: number) => !it.days?.length || it.days.includes(iso);
+  // Pass A: weekly goal or deadline.
+  for (const it of order.filter((i) => hasGoal(i) || !canShare(i))) {
+    const c = ctx(it);
     const rem = it.remainingHours; // null = unknown
     const overdue = !!it.deadline && it.deadline < todayKey;
-    const slots = it.deadline && !overdue ? countSlots(today, it.deadline, allowed, frozen) : null;
+    const slots = it.deadline && !overdue ? countSlots(today, it.deadline, c.allowed, frozen) : null;
     const hasWeekly = it.weeklyHours != null && it.weeklyHours > 0;
 
     // Hours/week needed to finish by the deadline, spread over the allowed days.
-    const required = rem != null && rem > 0 && slots ? (rem / slots) * nDays : null;
+    const required = rem != null && rem > 0 && slots ? (rem / slots) * c.nDays : null;
 
     // Per-day scheduled hours. Explicit weekly goal wins; otherwise deadline pace.
     const perDayH = hasWeekly
-      ? (it.weeklyHours as number) / nDays
+      ? (it.weeklyHours as number) / c.nDays
       : required != null
         ? (rem as number) / (slots as number)
         : 0;
-    const targetWeekly = perDayH * nDays;
+    const targetWeekly = perDayH * c.nDays;
     const needed = required ?? (hasWeekly ? (it.weeklyHours as number) : null);
 
     let status: PlanStatus;
     if (rem != null && rem <= 0) status = "done";
     else if (rem != null && it.deadline && (overdue || slots === 0)) status = "behind";
-    else if (needed == null || needed <= 0) status = "nodata";
-    else if (it.paceHours >= needed * AHEAD_RATIO) status = "ahead";
-    else if (it.paceHours >= needed) status = "ontrack";
-    else status = "behind";
+    else status = statusOf(it, needed);
+
+    // Deadline not reachable within the daily limit: suggest a later date or more hours per day.
+    let feasible = true;
+    let suggestion: PlanSuggestion | null = null;
+    if (rem != null && rem > 0 && it.deadline) {
+      const neededDaily = slots ? rem / slots : Infinity;
+      if (overdue || !slots || neededDaily > dailyBudgetHours + 1e-9) {
+        feasible = false;
+        const daily = Number.isFinite(dailyBudgetHours) ? dailyBudgetHours : perDayH;
+        suggestion = {
+          minDeadline: daily > 0 ? earliestFinish(today, rem, daily, c.allowed, frozen) : null,
+          neededDailyHours: neededDaily,
+        };
+      }
+    }
 
     const eta = rem != null && rem > 0 && targetWeekly > 0 ? addDays(today, Math.ceil((rem / targetWeekly) * 7)) : null;
 
-    // Never plan more than remains (rounded up to a block step).
-    let capLeft = rem == null ? Infinity : Math.ceil((rem * 60) / STEP) * STEP;
-    const mods = it.modules?.filter((m) => m.minutes > 0) ?? [];
-    const cum = [0];
-    mods.forEach((m) => cum.push(cum[cum.length - 1] + m.minutes));
-
     let carry = 0; // rounding error carried to next day, keeps weekly total on target
-    let placedMin = 0;
     let unplacedMin = 0;
 
     if (perDayH > 0) {
       for (const d of horizon) {
         if (it.deadline && d.key > it.deadline) break;
-        if (!allowed(d.iso) || frozen.has(d.key) || capLeft <= 0) continue;
+        if (!c.allowed(d.iso) || frozen.has(d.key) || c.capLeft <= 0) continue;
 
         const want = perDayH * 60 + carry;
-        const rounded = Math.round(want / STEP) * STEP;
+        const rounded = roundStep(want);
         carry = want - rounded;
-        const m = Math.min(rounded, capLeft);
-        const room = Math.max(0, Math.floor((budgetMin - (used.get(d.key) ?? 0)) / STEP) * STEP);
-        const place = Math.min(m, room);
-        if (place < STEP) {
-          unplacedMin += m - place;
-          continue;
-        }
-
-        blocks.push({ itemKey: it.key, date: d.key, minutes: place, label: moduleLabel(mods, cum, placedMin, place) });
-        used.set(d.key, (used.get(d.key) ?? 0) + place);
-        capLeft -= place;
-        placedMin += place;
-        unplacedMin += m - place;
+        const m = Math.min(rounded, c.capLeft);
+        const fit = Math.min(m, roomOn(d.key));
+        if (fit >= STEP) place(it, c, d.key, fit);
+        unplacedMin += m - (fit >= STEP ? fit : 0);
       }
     }
 
-    const unplacedHours = unplacedMin / 60 < UNPLACED_NOISE_HOURS ? 0 : unplacedMin / 60;
     rowsByKey.set(it.key, {
       key: it.key,
       status,
+      mode: hasWeekly ? "weekly" : it.deadline ? "deadline" : "none",
       requiredWeekly: required,
       targetWeekly,
+      dailyMinutes: Math.round(perDayH * 60),
       eta,
-      unplacedHours,
+      unplacedHours: unplacedMin / 60 < UNPLACED_NOISE_HOURS ? 0 : unplacedMin / 60,
+      feasible,
+      suggestion,
+    });
+  }
+
+  // Pass B: no goal, known remaining hours. Each day's free time is split by priority weight;
+  // an item that finishes frees its share for the others.
+  const sharers = order.filter((i) => !hasGoal(i) && canShare(i)).map((it) => ({ it, c: ctx(it), days: 0 }));
+  for (const d of horizon) {
+    if (frozen.has(d.key)) continue;
+    const active = sharers.filter((s) => s.c.allowed(d.iso) && s.c.capLeft > 0);
+    let room = roomOn(d.key);
+    if (active.length === 0 || room < STEP) continue;
+
+    const totalW = active.reduce((a, s) => a + PRIORITY_WEIGHT[s.it.priority], 0);
+    const give = new Map(
+      active.map((s) => [s, Math.min(Math.floor((room * PRIORITY_WEIGHT[s.it.priority]) / totalW / STEP) * STEP, s.c.capLeft)]),
+    );
+    room -= [...give.values()].reduce((a, v) => a + v, 0);
+    // Leftover from rounding and caps goes one step at a time, highest priority first.
+    for (let moved = true; room >= STEP && moved; ) {
+      moved = false;
+      for (const s of active) {
+        if (room < STEP) break;
+        if (give.get(s)! + STEP <= s.c.capLeft) {
+          give.set(s, give.get(s)! + STEP);
+          room -= STEP;
+          moved = true;
+        }
+      }
+    }
+    for (const [s, m] of give) {
+      if (m < STEP) continue;
+      place(s.it, s.c, d.key, m);
+      s.days++;
+    }
+  }
+
+  for (const s of sharers) {
+    const rem = s.it.remainingHours as number;
+    const dailyMinutes = s.days > 0 ? Math.round(s.c.placedMin / s.days) : 0;
+    const targetWeekly = (dailyMinutes / 60) * s.c.nDays;
+    rowsByKey.set(s.it.key, {
+      key: s.it.key,
+      status: statusOf(s.it, targetWeekly),
+      mode: "share",
+      requiredWeekly: null,
+      targetWeekly,
+      dailyMinutes,
+      eta: dailyMinutes > 0 ? earliestFinish(today, rem, dailyMinutes / 60, s.c.allowed, frozen) : null,
+      unplacedHours: 0,
+      feasible: true,
+      suggestion: null,
     });
   }
 
@@ -190,6 +304,21 @@ export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBloc
     rows: items.map((it) => rowsByKey.get(it.key)!),
     blocks: blocks.sort((a, b) => a.date.localeCompare(b.date) || a.itemKey.localeCompare(b.itemKey)),
   };
+}
+
+/** Minutes planned per day, keeping only days above the limit. Feeds the overload alert. */
+export function overloadedDays(blocks: { date: string; minutes: number }[], limitMinutes: number): Map<string, number> {
+  const perDay = new Map<string, number>();
+  for (const b of blocks) perDay.set(b.date, (perDay.get(b.date) ?? 0) + b.minutes);
+  return new Map([...perDay].filter(([, m]) => m > limitMinutes));
+}
+
+/** Splits a long block into near-equal sessions no longer than `maxBlock`, with a break between them. */
+export function splitBlock(minutes: number, maxBlock: number): { parts: number[]; breakMinutes: number } {
+  const n = Math.max(1, Math.ceil(minutes / Math.max(STEP, maxBlock)));
+  const base = Math.floor(minutes / n);
+  const parts = Array.from({ length: n }, (_, i) => base + (i < minutes - base * n ? 1 : 0));
+  return { parts, breakMinutes: n > 1 ? BREAK_MINUTES : 0 };
 }
 
 /** Minutes studied per `${itemKey}|${date}`. Feeds the "feito" column of the planned-vs-done view. */

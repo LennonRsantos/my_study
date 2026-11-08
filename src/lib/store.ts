@@ -77,23 +77,33 @@ export async function deleteSessionDb(id: string): Promise<void> {
 }
 
 // Daily Goal
+export const DEFAULT_GOAL: DailyGoal = { hoursPerDay: 4, dailyLimitHours: null, maxBlockMinutes: 90 };
+
 export async function getGoal(): Promise<DailyGoal> {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { hoursPerDay: 4 };
+  if (!user) return DEFAULT_GOAL;
   const { data, error } = await supabase.from("daily_goals").select("*").eq("user_id", user.id).limit(1).maybeSingle();
-  if (error || !data) return { hoursPerDay: 4 };
-  return { hoursPerDay: Number(data.hours_per_day) };
+  if (error || !data) return DEFAULT_GOAL;
+  return {
+    hoursPerDay: Number(data.hours_per_day),
+    dailyLimitHours: data.plan_daily_limit_hours == null ? null : Number(data.plan_daily_limit_hours),
+    maxBlockMinutes: data.plan_max_block_minutes ?? DEFAULT_GOAL.maxBlockMinutes,
+  };
 }
 
 export async function saveGoal(goal: DailyGoal): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
+  const row = {
+    hours_per_day: goal.hoursPerDay,
+    plan_daily_limit_hours: goal.dailyLimitHours,
+    plan_max_block_minutes: goal.maxBlockMinutes,
+  };
   const { data } = await supabase.from("daily_goals").select("id").eq("user_id", user.id).limit(1).maybeSingle();
-  if (data) {
-    await supabase.from("daily_goals").update({ hours_per_day: goal.hoursPerDay }).eq("id", data.id);
-  } else {
-    await supabase.from("daily_goals").insert({ hours_per_day: goal.hoursPerDay, user_id: user.id });
-  }
+  const { error } = data
+    ? await supabase.from("daily_goals").update(row).eq("id", data.id)
+    : await supabase.from("daily_goals").insert({ ...row, user_id: user.id });
+  if (error) throw error;
 }
 
 // Goals

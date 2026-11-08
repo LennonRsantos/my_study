@@ -50,6 +50,8 @@ export interface CourseInsight {
 
 export interface CourseInsights {
   loading: boolean;
+  /** Reloads courses after a change made outside this hook. */
+  refresh: () => Promise<void>;
   courses: CourseInsight[];
   active: CourseInsight[];
   completed: CourseInsight[];
@@ -93,7 +95,7 @@ export function buildCourseInsights(
   entries: TimedEntry[],
   subjects: Subject[],
   today = new Date(),
-): Omit<CourseInsights, "loading"> {
+): Omit<CourseInsights, "loading" | "refresh"> {
   const todayStr = format(today, "yyyy-MM-dd");
   const paceStart = format(subDays(today, PACE_DAYS - 1), "yyyy-MM-dd");
 
@@ -190,14 +192,15 @@ export function buildCourseInsights(
 
 export function useCourseInsights(): CourseInsights {
   const { sessions, practiceSessions, subjects } = useStudy();
-  const { courses, loading: coursesLoading } = useCourses();
+  const { courses, loading: coursesLoading, refresh } = useCourses();
   const { loading: modulesLoading, modulesFor } = useCourseModules();
 
   return useMemo(() => {
     const entries: TimedEntry[] = [...sessions, ...practiceSessions];
     return {
       loading: coursesLoading || modulesLoading,
+      refresh,
       ...buildCourseInsights(courses, modulesFor, entries, subjects),
     };
-  }, [courses, modulesFor, sessions, practiceSessions, subjects, coursesLoading, modulesLoading]);
+  }, [courses, modulesFor, sessions, practiceSessions, subjects, coursesLoading, modulesLoading, refresh]);
 }

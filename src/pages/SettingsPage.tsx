@@ -42,7 +42,7 @@ export default function SettingsPage() {
   const handleSave = () => {
     const val = parseFloat(hours);
     if (isNaN(val) || val <= 0) return;
-    setGoal({ hoursPerDay: val });
+    setGoal({ ...goal, hoursPerDay: val });
     toast.success("Meta salva");
   };
 

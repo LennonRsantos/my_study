@@ -20,6 +20,10 @@ export interface StudySession {
 
 export interface DailyGoal {
   hoursPerDay: number;
+  /** Planner fatigue limit; null = use hoursPerDay. */
+  dailyLimitHours: number | null;
+  /** Longest continuous block before the planner suggests a break. */
+  maxBlockMinutes: number;
 }
 
 export type PracticeType = 'exercise' | 'project' | 'challenge' | 'code_review' | 'reading' | 'other';
