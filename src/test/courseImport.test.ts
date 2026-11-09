@@ -42,6 +42,21 @@ describe("parseCourseJson", () => {
     expect(result.ok && result.modules[0].lessons[0]).toEqual({ name: "Quiz", durationSeconds: null, completed: true });
   });
 
+  it("turns page items into lessons and keeps item-less pages", () => {
+    const result = parseCourseJson(json([{ name: "M1", pages: [
+      { name: "1.1", items: [{ name: "1.1.1" }, { name: "1.1.2" }] },
+      { name: "Quiz", items: [] },
+    ] }]));
+    expect(result.ok && result.modules[0].lessons.map((l) => l.name)).toEqual(["1.1.1", "1.1.2", "Quiz"]);
+  });
+
+  it("accepts modules without wrapper, a bare array, title and lessons", () => {
+    const mods = [{ title: "A", lessons: [{ title: "a1" }] }];
+    const expected = { ok: true, modules: [{ name: "A", lessons: [{ name: "a1", durationSeconds: null, completed: false }] }] };
+    expect(parseCourseJson(JSON.stringify({ modules: mods }))).toEqual(expected);
+    expect(parseCourseJson(JSON.stringify(mods))).toEqual(expected);
+  });
+
   it("rejects invalid input", () => {
     expect(parseCourseJson("nope")).toEqual({ ok: false, error: "O texto não é um JSON válido." });
     expect(parseCourseJson("{}").ok).toBe(false);

@@ -13,24 +13,33 @@ export interface ImportedModule {
 
 const nameSchema = z.string().trim().min(1).max(200);
 
+type Raw = Record<string, unknown>;
+const isObj = (v: unknown): v is Raw => typeof v === "object" && v !== null && !Array.isArray(v);
+const withName = (v: unknown) => (isObj(v) ? { ...v, name: v.name ?? v.title } : v);
+
 // Only the fields used here: zod drops ids, thumbnails, hashes and the rest of the platform data.
-const courseSchema = z.object({
-  course: z.object({
-    modules: z.array(z.object({
-      name: nameSchema,
-      pages: z.array(z.object({
-        name: nameSchema,
-        type: z.string().optional(),
-        completed: z.boolean().default(false),
-        mediaDurationInSeconds: z.number().nonnegative().nullish(),
-      })),
-    })),
-  }),
+const leafSchema = z.object({
+  name: nameSchema,
+  type: z.string().optional(),
+  completed: z.boolean().default(false),
+  mediaDurationInSeconds: z.number().nonnegative().nullish(),
 });
+const pageSchema = z.preprocess(withName, leafSchema.extend({
+  items: z.array(z.preprocess(withName, leafSchema)).optional(),
+}));
+const moduleSchema = z.preprocess(
+  (v) => (isObj(v) ? { ...v, name: v.name ?? v.title, pages: v.pages ?? v.lessons ?? v.items } : v),
+  z.object({ name: nameSchema, pages: z.array(pageSchema) }),
+);
+// Accepts { course: { modules } }, { modules } or a bare array of modules.
+const courseSchema = z.preprocess(
+  (v) => (Array.isArray(v) ? v : isObj(v) ? (isObj(v.course) ? v.course.modules : v.modules) : v),
+  z.array(moduleSchema),
+);
 
 export type CourseJsonResult = { ok: true; modules: ImportedModule[] } | { ok: false; error: string };
 
-/** Reads the course JSON exported from the platform. Ads and modules left without lessons are dropped. */
+/** Reads a course JSON (platform export, or modules → pages → items). Ads and modules left without lessons are dropped. */
 export function parseCourseJson(text: string): CourseJsonResult {
   let json: unknown;
   try {
@@ -43,10 +52,12 @@ export function parseCourseJson(text: string): CourseJsonResult {
     const issue = parsed.error.issues[0];
     return { ok: false, error: `Campo inválido em "${issue.path.join(".") || "raiz"}": ${issue.message}` };
   }
-  const modules = parsed.data.course.modules
+  const modules = parsed.data
     .map((m) => ({
       name: m.name,
       lessons: m.pages
+        // A page with items is a section: its items are the lessons.
+        .flatMap((p) => (p.items?.length ? p.items : [p]))
         .filter((p) => p.type !== "ADVERTISEMENT")
         .map((p) => ({
           name: p.name,
