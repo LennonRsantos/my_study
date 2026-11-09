@@ -130,11 +130,10 @@ export default function CoursesPage() {
     const created = await importModules(courseId, imported);
     if (created === null) return false;
     if (created === 0) {
-      toast.info("Todos os módulos do JSON já existem neste curso");
+      toast.info("O curso já está igual ao JSON");
       return true;
     }
-    const skipped = imported.length - created;
-    toast.success(`${created} módulos importados${skipped > 0 ? `, ${skipped} já existiam` : ""}`);
+    toast.success(`${created} módulos importados ou atualizados`);
     if (imported.some((m) => m.lessons.some((l) => !l.completed))) await reopenIfCompleted(courseId);
     return true;
   };

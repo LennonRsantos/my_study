@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { courseImportRows, type ImportedModule } from "@/lib/courseImport";
+import { courseImportRows, lessonSyncPlan, type ImportedModule } from "@/lib/courseImport";
 
 export interface CourseLesson {
   id: string;
@@ -146,28 +146,59 @@ export function useCourseModules() {
     if (allDone !== m.completed) await updateModule(moduleId, { completed: allDone, completed_at: allDone ? completed_at : null });
   };
 
+  /** Syncs an existing module's lessons with the JSON (see lessonSyncPlan). Returns false on failure. */
+  const syncModuleLessons = async (m: CourseModule, imported: ImportedModule) => {
+    if (!user) return false;
+    const plan = lessonSyncPlan(m.lessons ?? [], imported.lessons);
+    if (!plan.changed) return true;
+    const results = await Promise.all([
+      plan.deleteIds.length ? supabase.from("course_lessons").delete().in("id", plan.deleteIds) : null,
+      plan.insert.length
+        ? supabase.from("course_lessons").insert(plan.insert.map((l) => ({
+          user_id: user.id, module_id: m.id, name: l.name, position: l.position, duration_seconds: l.duration_seconds, completed: l.completed,
+        })))
+        : null,
+      ...plan.reposition.map((l) => supabase.from("course_lessons").update({ position: l.position }).eq("id", l.id)),
+      supabase.from("course_modules").update({
+        lesson_count: plan.lessonCount,
+        duration_minutes: plan.durationMinutes,
+        completed: plan.allDone,
+        completed_at: plan.allDone ? m.completed_at : null,
+      }).eq("id", m.id),
+    ]);
+    return results.every((r) => !r?.error);
+  };
+
   /**
-   * Creates modules and lessons, or nothing: failed lessons remove the modules again.
-   * Modules whose name already exists in the course are skipped, so importing twice keeps progress.
-   * Returns how many modules were created, or null on failure.
+   * Creates new modules with their lessons, or none: failed lessons remove the modules again.
+   * Modules whose name already exists in the course get their lessons synced, keeping completed ones.
+   * Returns how many modules were created or changed, or null on failure.
    */
   const importModules = async (courseId: string, imported: ImportedModule[]) => {
     if (!user) return null;
     const existing = modules.filter((m) => m.course_id === courseId);
-    const names = new Set(existing.map((m) => m.name));
-    const fresh = imported.filter((m) => !names.has(m.name));
-    if (fresh.length === 0) return 0;
-    const { moduleRows, lessonRows } = courseImportRows(fresh, courseId, user.id, existing.length);
-    const { error } = await supabase.from("course_modules").insert(moduleRows);
-    if (error) { toast.error("Erro ao criar os módulos"); return null; }
-    const { error: lessonsError } = await supabase.from("course_lessons").insert(lessonRows);
-    if (lessonsError) {
-      await supabase.from("course_modules").delete().in("id", moduleRows.map((m) => m.id));
-      toast.error("Erro ao criar as aulas");
-      return null;
+    const byName = new Map(existing.map((m) => [m.name, m]));
+    const fresh = imported.filter((m) => !byName.has(m.name));
+    const synced = imported.filter((m) => {
+      const old = byName.get(m.name);
+      return old && lessonSyncPlan(old.lessons ?? [], m.lessons).changed;
+    });
+    if (fresh.length === 0 && synced.length === 0) return 0;
+    if (fresh.length > 0) {
+      const { moduleRows, lessonRows } = courseImportRows(fresh, courseId, user.id, existing.length);
+      const { error } = await supabase.from("course_modules").insert(moduleRows);
+      if (error) { toast.error("Erro ao criar os módulos"); return null; }
+      const { error: lessonsError } = await supabase.from("course_lessons").insert(lessonRows);
+      if (lessonsError) {
+        await supabase.from("course_modules").delete().in("id", moduleRows.map((m) => m.id));
+        toast.error("Erro ao criar as aulas");
+        return null;
+      }
     }
+    const syncOk = (await Promise.all(synced.map((m) => syncModuleLessons(byName.get(m.name)!, m)))).every(Boolean);
     await load();
-    return fresh.length;
+    if (!syncOk) { toast.error("Erro ao atualizar as aulas de alguns módulos"); return null; }
+    return fresh.length + synced.length;
   };
 
   const deleteModule = async (id: string) => {

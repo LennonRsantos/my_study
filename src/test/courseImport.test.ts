@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { courseImportRows, parseCourseJson } from "@/lib/courseImport";
+import { courseImportRows, lessonSyncPlan, parseCourseJson } from "@/lib/courseImport";
 import { moduleLessonsDone, moduleStats, type CourseLesson, type CourseModule } from "@/hooks/useCourseModules";
 import { buildCourseInsights } from "@/hooks/useCourseInsights";
 import type { Course } from "@/hooks/useCourses";
@@ -84,6 +84,27 @@ describe("courseImportRows", () => {
   it("leaves imported progress undated", () => {
     const { moduleRows, lessonRows } = courseImportRows(modules, "c", "u");
     expect([...moduleRows, ...lessonRows].every((r) => !("completed_at" in r))).toBe(true);
+  });
+});
+
+describe("lessonSyncPlan", () => {
+  const row = (id: string, name: string, position: number, completed = false) => ({ id, name, position, duration_seconds: 60, completed });
+  const imp = (name: string) => ({ name, durationSeconds: null, completed: false });
+
+  it("swaps old sections for the JSON items, keeping completed lessons at the end", () => {
+    const plan = lessonSyncPlan(
+      [row("s1", "1.1. Seção", 0), row("s2", "1.2. Seção", 1, true), row("k", "1.1.2", 2)],
+      [imp("1.1.1"), imp("1.1.2")],
+    );
+    expect(plan.deleteIds).toEqual(["s1"]);
+    expect(plan.insert.map((l) => [l.name, l.position])).toEqual([["1.1.1", 0]]);
+    expect(plan.reposition.map((l) => [l.id, l.position])).toEqual([["k", 1], ["s2", 2]]);
+    expect([plan.lessonCount, plan.allDone, plan.changed]).toEqual([3, false, true]);
+  });
+
+  it("matches repeated names one row each and reports no change when equal", () => {
+    const plan = lessonSyncPlan([row("a", "Quiz", 0), row("b", "Quiz", 1)], [imp("Quiz"), imp("Quiz")]);
+    expect(plan.changed).toBe(false);
   });
 });
 

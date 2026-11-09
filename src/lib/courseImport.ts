@@ -100,3 +100,32 @@ export function courseImportRows(modules: ImportedModule[], courseId: string, us
   );
   return { moduleRows, lessonRows };
 }
+
+type SyncedLesson = { id: string; name: string; position: number; duration_seconds: number | null; completed: boolean };
+
+/**
+ * Re-import into an existing module: lessons follow the JSON order, lessons missing in the module are added,
+ * and old lessons absent from the JSON are removed unless completed (those keep their progress, at the end).
+ */
+export function lessonSyncPlan(existing: SyncedLesson[], imported: ImportedLesson[]) {
+  // Queue per name, so repeated lesson names match one row each.
+  const byName = new Map<string, SyncedLesson[]>();
+  for (const l of existing) byName.set(l.name, [...(byName.get(l.name) ?? []), l]);
+  const matched = imported.map((l) => byName.get(l.name)?.shift()
+    ?? { id: null, name: l.name, position: -1, duration_seconds: l.durationSeconds, completed: l.completed });
+  const rest = [...byName.values()].flat();
+  const deleteIds = rest.filter((l) => !l.completed).map((l) => l.id);
+  const final = [...matched, ...rest.filter((l) => l.completed)].map((l, position) => ({ ...l, oldPosition: l.position, position }));
+  const insert = final.filter((l) => l.id === null);
+  const reposition = final.filter((l): l is typeof l & { id: string } => l.id !== null && l.oldPosition !== l.position);
+  const seconds = final.reduce((a, l) => a + (l.duration_seconds ?? 0), 0);
+  return {
+    deleteIds,
+    insert,
+    reposition,
+    lessonCount: final.length,
+    durationMinutes: seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : null,
+    allDone: final.length > 0 && final.every((l) => l.completed),
+    changed: deleteIds.length > 0 || insert.length > 0 || reposition.length > 0,
+  };
+}
