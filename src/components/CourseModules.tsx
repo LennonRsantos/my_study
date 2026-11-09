@@ -12,12 +12,23 @@ import RowActions from "@/components/page/RowActions";
 import { ColorDot } from "@/components/page/bits";
 import { toast } from "sonner";
 import ImportModulesDialog from "@/components/ImportModulesDialog";
-import { moduleLessonsDone, type CourseModule } from "@/hooks/useCourseModules";
+import { moduleLessonsDone, type CourseLesson, type CourseModule } from "@/hooks/useCourseModules";
 import type { ImportedModule } from "@/lib/courseImport";
 
 type ModuleFields = { name: string; description: string; lesson_count: number; duration_minutes: number | null; subject_ids: string[] };
 
 interface SubjectLite { id: string; name: string; color: string }
+
+/** Groups consecutive lessons of the same submodule; lessons without one stay loose. */
+function lessonGroups(lessons: CourseLesson[]) {
+  const groups: { key: string; section: string | null; lessons: CourseLesson[] }[] = [];
+  for (const l of lessons) {
+    const last = groups[groups.length - 1];
+    if (last && last.section === (l.section ?? null)) last.lessons.push(l);
+    else groups.push({ key: l.id, section: l.section ?? null, lessons: [l] });
+  }
+  return groups;
+}
 
 export function CourseModules({
   courseId,
@@ -26,7 +37,7 @@ export function CourseModules({
   onAdd,
   onUpdate,
   onToggleComplete,
-  onToggleLesson,
+  onSetLessons,
   onImport,
   onDelete,
 }: {
@@ -36,7 +47,7 @@ export function CourseModules({
   onAdd: (v: Omit<CourseModule, "id" | "position" | "completed" | "completed_at">) => Promise<void> | void;
   onUpdate: (id: string, patch: Partial<CourseModule>) => Promise<void> | void;
   onToggleComplete: (id: string) => Promise<void> | void;
-  onToggleLesson: (moduleId: string, lessonId: string) => Promise<void> | void;
+  onSetLessons: (moduleId: string, lessonIds: string[], completed: boolean) => Promise<void> | void;
   onImport: (modules: ImportedModule[]) => Promise<boolean>;
   onDelete: (id: string) => Promise<void> | void;
 }) {
@@ -160,19 +171,38 @@ export function CourseModules({
                       )}
                       {lessonsOpen && (
                         <ol className="mt-2 space-y-0.5">
-                          {lessons.map((l) => (
-                            <li key={l.id}>
-                              <label className="flex cursor-pointer items-center gap-2 rounded py-1 text-sm">
-                                <Checkbox checked={l.completed} onCheckedChange={() => onToggleLesson(m.id, l.id)} />
-                                <span className={cn("min-w-0 flex-1", l.completed && "text-muted-foreground")}>{l.name}</span>
-                                {(l.duration_seconds ?? 0) > 0 && (
-                                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                                    {formatDuration((l.duration_seconds ?? 0) / 3600)}
-                                  </span>
-                                )}
-                              </label>
-                            </li>
-                          ))}
+                          {lessonGroups(lessons).map((g) => {
+                            const lessonList = g.lessons.map((l) => (
+                              <li key={l.id}>
+                                <label className="flex cursor-pointer items-center gap-2 rounded py-1 text-sm">
+                                  <Checkbox checked={l.completed} onCheckedChange={() => onSetLessons(m.id, [l.id], !l.completed)} />
+                                  <span className={cn("min-w-0 flex-1", l.completed && "text-muted-foreground")}>{l.name}</span>
+                                  {(l.duration_seconds ?? 0) > 0 && (
+                                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                                      {formatDuration((l.duration_seconds ?? 0) / 3600)}
+                                    </span>
+                                  )}
+                                </label>
+                              </li>
+                            ));
+                            if (g.section === null) return lessonList;
+                            const done = g.lessons.filter((l) => l.completed).length;
+                            const allDone = done === g.lessons.length;
+                            return (
+                              <li key={g.key}>
+                                <label className="flex cursor-pointer items-center gap-2 rounded py-1 text-sm font-medium">
+                                  <Checkbox
+                                    checked={allDone ? true : done > 0 ? "indeterminate" : false}
+                                    onCheckedChange={() => onSetLessons(m.id, g.lessons.map((l) => l.id), !allDone)}
+                                    aria-label={`${allDone ? "Desmarcar" : "Marcar"} todas as aulas de ${g.section}`}
+                                  />
+                                  <span className={cn("min-w-0 flex-1", allDone && "text-muted-foreground")}>{g.section}</span>
+                                  <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground">{done} de {g.lessons.length}</span>
+                                </label>
+                                <ol className="ml-6 space-y-0.5">{lessonList}</ol>
+                              </li>
+                            );
+                          })}
                         </ol>
                       )}
                     </div>

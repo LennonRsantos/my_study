@@ -10,7 +10,7 @@ const page = (name: string, patch: object = {}) => ({
 const json = (modules: unknown[]) => JSON.stringify({ course: { name: null, modules } });
 
 const lesson = (id: string, patch: Partial<CourseLesson> = {}): CourseLesson => ({
-  id, module_id: "m", name: id, position: 0, duration_seconds: 600, completed: false, completed_at: null, ...patch,
+  id, module_id: "m", name: id, position: 0, duration_seconds: 600, completed: false, completed_at: null, section: null, ...patch,
 });
 const mod = (patch: Partial<CourseModule> = {}): CourseModule => ({
   id: "m", course_id: "c", name: "M", description: null, lesson_count: 0, subject_ids: [], position: 0,
@@ -25,7 +25,7 @@ describe("parseCourseJson", () => {
     const result = parseCourseJson(json([{ id: "1", name: " HTML ", pages: [page(" Tags ", { completed: true })] }]));
     expect(result).toEqual({
       ok: true,
-      modules: [{ name: "HTML", lessons: [{ name: "Tags", durationSeconds: 600, completed: true }] }],
+      modules: [{ name: "HTML", lessons: [{ name: "Tags", durationSeconds: 600, completed: true, section: null }] }],
     });
   });
 
@@ -39,7 +39,7 @@ describe("parseCourseJson", () => {
 
   it("keeps quizzes as lessons without duration", () => {
     const result = parseCourseJson(json([{ name: "A", pages: [{ name: "Quiz", type: "QUIZ", completed: true }] }]));
-    expect(result.ok && result.modules[0].lessons[0]).toEqual({ name: "Quiz", durationSeconds: null, completed: true });
+    expect(result.ok && result.modules[0].lessons[0]).toEqual({ name: "Quiz", durationSeconds: null, completed: true, section: null });
   });
 
   it("turns page items into lessons and keeps item-less pages", () => {
@@ -47,12 +47,12 @@ describe("parseCourseJson", () => {
       { name: "1.1", items: [{ name: "1.1.1" }, { name: "1.1.2" }] },
       { name: "Quiz", items: [] },
     ] }]));
-    expect(result.ok && result.modules[0].lessons.map((l) => l.name)).toEqual(["1.1.1", "1.1.2", "Quiz"]);
+    expect(result.ok && result.modules[0].lessons.map((l) => [l.name, l.section])).toEqual([["1.1.1", "1.1"], ["1.1.2", "1.1"], ["Quiz", null]]);
   });
 
   it("accepts modules without wrapper, a bare array, title and lessons", () => {
     const mods = [{ title: "A", lessons: [{ title: "a1" }] }];
-    const expected = { ok: true, modules: [{ name: "A", lessons: [{ name: "a1", durationSeconds: null, completed: false }] }] };
+    const expected = { ok: true, modules: [{ name: "A", lessons: [{ name: "a1", durationSeconds: null, completed: false, section: null }] }] };
     expect(parseCourseJson(JSON.stringify({ modules: mods }))).toEqual(expected);
     expect(parseCourseJson(JSON.stringify(mods))).toEqual(expected);
   });
@@ -66,13 +66,14 @@ describe("parseCourseJson", () => {
 
 describe("courseImportRows", () => {
   const modules = [
-    { name: "A", lessons: [{ name: "a1", durationSeconds: 90, completed: true }, { name: "a2", durationSeconds: null, completed: true }] },
-    { name: "B", lessons: [{ name: "b1", durationSeconds: 600, completed: true }, { name: "b2", durationSeconds: 600, completed: false }] },
+    { name: "A", lessons: [{ name: "a1", durationSeconds: 90, completed: true, section: "S" }, { name: "a2", durationSeconds: null, completed: true, section: null }] },
+    { name: "B", lessons: [{ name: "b1", durationSeconds: 600, completed: true, section: null }, { name: "b2", durationSeconds: 600, completed: false, section: null }] },
   ];
 
   it("links lessons to modules and continues positions", () => {
     const { moduleRows, lessonRows } = courseImportRows(modules, "c", "u", 3);
     expect(moduleRows.map((m) => m.position)).toEqual([3, 4]);
+    expect(lessonRows.map((l) => l.section)).toEqual(["S", null, null, null]);
     expect(lessonRows.filter((l) => l.module_id === moduleRows[1].id).map((l) => [l.name, l.position])).toEqual([["b1", 0], ["b2", 1]]);
   });
 
@@ -88,8 +89,9 @@ describe("courseImportRows", () => {
 });
 
 describe("lessonSyncPlan", () => {
-  const row = (id: string, name: string, position: number, completed = false) => ({ id, name, position, duration_seconds: 60, completed });
-  const imp = (name: string) => ({ name, durationSeconds: null, completed: false });
+  const row = (id: string, name: string, position: number, completed = false) =>
+    ({ id, name, position, duration_seconds: 60, completed, section: null as string | null });
+  const imp = (name: string, section: string | null = null) => ({ name, durationSeconds: null, completed: false, section });
 
   it("swaps old sections for the JSON items, keeping completed lessons at the end", () => {
     const plan = lessonSyncPlan(
@@ -105,6 +107,11 @@ describe("lessonSyncPlan", () => {
   it("matches repeated names one row each and reports no change when equal", () => {
     const plan = lessonSyncPlan([row("a", "Quiz", 0), row("b", "Quiz", 1)], [imp("Quiz"), imp("Quiz")]);
     expect(plan.changed).toBe(false);
+  });
+
+  it("moves existing lessons into their submodule", () => {
+    const plan = lessonSyncPlan([row("a", "1.1.1", 0, true)], [imp("1.1.1", "1.1")]);
+    expect(plan.reposition.map((l) => [l.id, l.section, l.completed])).toEqual([["a", "1.1", true]]);
   });
 });
 

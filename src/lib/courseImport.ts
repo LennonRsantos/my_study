@@ -4,6 +4,8 @@ export interface ImportedLesson {
   name: string;
   durationSeconds: number | null;
   completed: boolean;
+  /** Submodule the lesson belongs to; null when it sits directly in the module. */
+  section: string | null;
 }
 
 export interface ImportedModule {
@@ -56,13 +58,14 @@ export function parseCourseJson(text: string): CourseJsonResult {
     .map((m) => ({
       name: m.name,
       lessons: m.pages
-        // A page with items is a section: its items are the lessons.
-        .flatMap((p) => (p.items?.length ? p.items : [p]))
+        // A page with items is a submodule: its items are the lessons.
+        .flatMap((p) => (p.items?.length ? p.items.map((i) => ({ ...i, section: p.name })) : [{ ...p, section: null }]))
         .filter((p) => p.type !== "ADVERTISEMENT")
         .map((p) => ({
           name: p.name,
           durationSeconds: p.mediaDurationInSeconds ? Math.round(p.mediaDurationInSeconds) : null,
           completed: p.completed,
+          section: p.section,
         })),
     }))
     .filter((m) => m.lessons.length > 0);
@@ -96,28 +99,35 @@ export function courseImportRows(modules: ImportedModule[], courseId: string, us
       position,
       duration_seconds: l.durationSeconds,
       completed: l.completed,
+      section: l.section,
     })),
   );
   return { moduleRows, lessonRows };
 }
 
-type SyncedLesson = { id: string; name: string; position: number; duration_seconds: number | null; completed: boolean };
+type SyncedLesson = { id: string; name: string; position: number; duration_seconds: number | null; completed: boolean; section: string | null };
 
 /**
- * Re-import into an existing module: lessons follow the JSON order, lessons missing in the module are added,
- * and old lessons absent from the JSON are removed unless completed (those keep their progress, at the end).
+ * Re-import into an existing module: lessons follow the JSON order and submodules, lessons missing in the module are added,
+ * and old lessons absent from the JSON are removed unless completed (those keep their progress, at the end, out of any submodule).
  */
 export function lessonSyncPlan(existing: SyncedLesson[], imported: ImportedLesson[]) {
   // Queue per name, so repeated lesson names match one row each.
   const byName = new Map<string, SyncedLesson[]>();
   for (const l of existing) byName.set(l.name, [...(byName.get(l.name) ?? []), l]);
-  const matched = imported.map((l) => byName.get(l.name)?.shift()
-    ?? { id: null, name: l.name, position: -1, duration_seconds: l.durationSeconds, completed: l.completed });
+  const matched = imported.map((l) => {
+    const old = byName.get(l.name)?.shift();
+    return old
+      ? { ...old, old, section: l.section }
+      : { id: null, old: null, name: l.name, duration_seconds: l.durationSeconds, completed: l.completed, section: l.section };
+  });
   const rest = [...byName.values()].flat();
   const deleteIds = rest.filter((l) => !l.completed).map((l) => l.id);
-  const final = [...matched, ...rest.filter((l) => l.completed)].map((l, position) => ({ ...l, oldPosition: l.position, position }));
+  const leftovers = rest.filter((l) => l.completed).map((l) => ({ ...l, old: l, section: null }));
+  const final = [...matched, ...leftovers].map((l, position) => ({ ...l, position }));
   const insert = final.filter((l) => l.id === null);
-  const reposition = final.filter((l): l is typeof l & { id: string } => l.id !== null && l.oldPosition !== l.position);
+  const reposition = final.filter((l): l is typeof l & { id: string } =>
+    l.old !== null && (l.old.position !== l.position || l.old.section !== l.section));
   const seconds = final.reduce((a, l) => a + (l.duration_seconds ?? 0), 0);
   return {
     deleteIds,

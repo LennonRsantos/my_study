@@ -34,7 +34,7 @@ export default function CoursesPage() {
   const { subjects, sessions, practiceSessions } = useStudy();
   const { user } = useAuth();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, addCategory, updateCategory, deleteCategory } = useCategories("course");
-  const { modules, loading: modulesLoading, modulesFor, addModule, updateModule, toggleModuleComplete, toggleLesson, importModules, deleteModule } = useCourseModules();
+  const { modules, loading: modulesLoading, modulesFor, addModule, updateModule, toggleModuleComplete, setLessonsCompleted, importModules, deleteModule } = useCourseModules();
   const { courses, loading, refresh: fetchCourses } = useCourses();
   const [editing, setEditing] = useState<Course | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -116,14 +116,13 @@ export default function CoursesPage() {
     if (wasCompleted?.completed) await reopenIfCompleted(wasCompleted.course_id);
   };
 
-  const handleToggleLesson = async (moduleId: string, lessonId: string) => {
+  const handleSetLessons = async (moduleId: string, lessonIds: string[], completed: boolean) => {
     const mod = modules.find((m) => m.id === moduleId);
-    const wasDone = mod?.lessons?.find((l) => l.id === lessonId)?.completed;
-    await toggleLesson(moduleId, lessonId);
+    await setLessonsCompleted(moduleId, lessonIds, completed);
     // The module follows its lessons; schedule or drop its reviews when that flips.
-    const willBeDone = !!mod?.lessons?.length && mod.lessons.every((l) => (l.id === lessonId ? !wasDone : l.completed));
+    const willBeDone = !!mod?.lessons?.length && mod.lessons.every((l) => (lessonIds.includes(l.id) ? completed : l.completed));
     if (mod && willBeDone !== mod.completed) await reviews(mod.course_id, mod.id, mod.name, willBeDone);
-    if (mod && wasDone) await reopenIfCompleted(mod.course_id);
+    if (mod && !completed) await reopenIfCompleted(mod.course_id);
   };
 
   const handleImportModules = async (courseId: string, imported: ImportedModule[]) => {
@@ -180,7 +179,7 @@ export default function CoursesPage() {
       onAddModule={handleAddModule}
       onUpdateModule={updateModule}
       onToggleModule={handleToggleModule}
-      onToggleLesson={handleToggleLesson}
+      onSetLessons={handleSetLessons}
       onImportModules={(imported) => handleImportModules(course.id, imported)}
       onDeleteModule={deleteModule}
     />
@@ -247,7 +246,7 @@ export default function CoursesPage() {
   );
 }
 
-function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, onDelete, onToggleComplete, modules, onAddModule, onUpdateModule, onToggleModule, onToggleLesson, onImportModules, onDeleteModule }: {
+function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, onDelete, onToggleComplete, modules, onAddModule, onUpdateModule, onToggleModule, onSetLessons, onImportModules, onDeleteModule }: {
   course: Course;
   subjects: { id: string; name: string; color: string }[];
   categories: { id: string; name: string; color: string }[];
@@ -259,7 +258,7 @@ function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, on
   onAddModule: (v: Omit<CourseModule, "id" | "position" | "completed" | "completed_at">) => Promise<void> | void;
   onUpdateModule: (id: string, patch: Partial<CourseModule>) => Promise<void> | void;
   onToggleModule: (id: string) => Promise<void> | void;
-  onToggleLesson: (moduleId: string, lessonId: string) => Promise<void> | void;
+  onSetLessons: (moduleId: string, lessonIds: string[], completed: boolean) => Promise<void> | void;
   onImportModules: (modules: ImportedModule[]) => Promise<boolean>;
   onDeleteModule: (id: string) => Promise<void> | void;
 }) {
@@ -342,7 +341,7 @@ function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, on
           onAdd={onAddModule}
           onUpdate={onUpdateModule}
           onToggleComplete={onToggleModule}
-          onToggleLesson={onToggleLesson}
+          onSetLessons={onSetLessons}
           onImport={onImportModules}
           onDelete={onDeleteModule}
         />

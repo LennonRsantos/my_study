@@ -12,6 +12,7 @@ export interface CourseLesson {
   duration_seconds: number | null;
   completed: boolean;
   completed_at: string | null;
+  section: string | null;
 }
 
 export interface CourseModule {
@@ -123,26 +124,24 @@ export function useCourseModules() {
     await setModuleCompleted(id, !m.completed);
   };
 
-  /** Checks a lesson and keeps its module in step: done only while every lesson is done. */
-  const toggleLesson = async (moduleId: string, lessonId: string) => {
+  /** Checks or unchecks lessons (one, or a whole submodule) and keeps the module in step: done only while every lesson is done. */
+  const setLessonsCompleted = async (moduleId: string, lessonIds: string[], completed: boolean) => {
     const m = modules.find((x) => x.id === moduleId);
-    const lesson = m?.lessons?.find((l) => l.id === lessonId);
-    if (!m?.lessons || !lesson) return;
-    const completed = !lesson.completed;
+    if (!m?.lessons) return;
+    const ids = new Set(m.lessons.filter((l) => lessonIds.includes(l.id) && l.completed !== completed).map((l) => l.id));
+    if (ids.size === 0) return;
     const completed_at = completed ? new Date().toISOString() : null;
-    const setLesson = (patch: Partial<CourseLesson>) =>
-      setModules((p) => p.map((x) => (x.id === moduleId
-        ? { ...x, lessons: x.lessons?.map((l) => (l.id === lessonId ? { ...l, ...patch } : l)) }
-        : x)));
+    const setLessons = (lessons: CourseLesson[]) =>
+      setModules((p) => p.map((x) => (x.id === moduleId ? { ...x, lessons } : x)));
 
-    setLesson({ completed, completed_at });
-    const { error } = await supabase.from("course_lessons").update({ completed, completed_at }).eq("id", lessonId);
+    setLessons(m.lessons.map((l) => (ids.has(l.id) ? { ...l, completed, completed_at } : l)));
+    const { error } = await supabase.from("course_lessons").update({ completed, completed_at }).in("id", [...ids]);
     if (error) {
-      setLesson({ completed: lesson.completed, completed_at: lesson.completed_at });
+      setLessons(m.lessons);
       toast.error("Erro ao salvar a aula");
       return;
     }
-    const allDone = m.lessons.every((l) => (l.id === lessonId ? completed : l.completed));
+    const allDone = m.lessons.every((l) => (ids.has(l.id) ? completed : l.completed));
     if (allDone !== m.completed) await updateModule(moduleId, { completed: allDone, completed_at: allDone ? completed_at : null });
   };
 
@@ -155,10 +154,10 @@ export function useCourseModules() {
       plan.deleteIds.length ? supabase.from("course_lessons").delete().in("id", plan.deleteIds) : null,
       plan.insert.length
         ? supabase.from("course_lessons").insert(plan.insert.map((l) => ({
-          user_id: user.id, module_id: m.id, name: l.name, position: l.position, duration_seconds: l.duration_seconds, completed: l.completed,
+          user_id: user.id, module_id: m.id, name: l.name, position: l.position, duration_seconds: l.duration_seconds, completed: l.completed, section: l.section,
         })))
         : null,
-      ...plan.reposition.map((l) => supabase.from("course_lessons").update({ position: l.position }).eq("id", l.id)),
+      ...plan.reposition.map((l) => supabase.from("course_lessons").update({ position: l.position, section: l.section }).eq("id", l.id)),
       supabase.from("course_modules").update({
         lesson_count: plan.lessonCount,
         duration_minutes: plan.durationMinutes,
@@ -206,5 +205,5 @@ export function useCourseModules() {
     setModules((p) => p.filter((m) => m.id !== id));
   };
 
-  return { modules, loading, modulesFor, addModule, updateModule, setModuleCompleted, toggleModuleComplete, toggleLesson, importModules, deleteModule, refresh: load };
+  return { modules, loading, modulesFor, addModule, updateModule, setModuleCompleted, toggleModuleComplete, setLessonsCompleted, importModules, deleteModule, refresh: load };
 }

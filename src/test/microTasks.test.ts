@@ -19,7 +19,7 @@ describe("microTasks", () => {
   it("suggests the next short lesson, then a review of the last module, then light tasks", () => {
     const next = mod({
       id: "m2", name: "Funções",
-      lessons: [{ id: "l", module_id: "m2", name: "Arrow", position: 0, duration_seconds: 300, completed: false, completed_at: null }],
+      lessons: [{ id: "l", module_id: "m2", name: "Arrow", position: 0, duration_seconds: 300, completed: false, completed_at: null, section: null }],
     });
     const done = mod({ id: "m1", name: "Variáveis", completed: true, completed_at: "2026-11-01T10:00:00" });
     const tasks = microTasks([insight([done, next])]);

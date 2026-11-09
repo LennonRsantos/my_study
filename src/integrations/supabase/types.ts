@@ -97,6 +97,7 @@ export type Database = {
           module_id: string
           name: string
           position: number
+          section: string | null
           user_id: string
         }
         Insert: {
@@ -108,6 +109,7 @@ export type Database = {
           module_id: string
           name: string
           position?: number
+          section?: string | null
           user_id: string
         }
         Update: {
@@ -119,6 +121,7 @@ export type Database = {
           module_id?: string
           name?: string
           position?: number
+          section?: string | null
           user_id?: string
         }
         Relationships: [
