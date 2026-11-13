@@ -1,5 +1,5 @@
 // Session notes are stored in study_sessions.notes as a prefixed JSON string.
-// v4: { moduleId, moduleName, subjectIds, studied } — current format.
+// v4: { moduleId, moduleName, subjectIds, sections, studied, memo } — current format (sections/memo optional).
 // v3: { courseSessions: [{ number, title, progress }], topics } — legacy, read only.
 // v2: { course, topics } — legacy, read only.
 // Plain text legacy -> treated as studied text.
@@ -22,6 +22,10 @@ export interface SessionModuleRef {
 export interface SessionNotes {
   module: SessionModuleRef | null;
   studied: string;
+  /** Submodules (lesson sections) of the module studied in the session. */
+  sections?: string[];
+  /** Free notes. */
+  memo?: string;
 }
 
 export interface ParsedNotes {
@@ -30,12 +34,16 @@ export interface ParsedNotes {
   courseSessions: CourseSessionEntry[];
   /** Studied text. For legacy notes, the old topics text. */
   topics: string;
+  /** Submodules studied (v4 only). */
+  sections: string[];
+  /** Free notes (v4 only). */
+  memo: string;
   /** Convenience: first legacy course session title, for compact displays */
   course: string;
 }
 
 export function parseNotes(raw: string | null | undefined): ParsedNotes {
-  const empty: ParsedNotes = { module: null, courseSessions: [], topics: "", course: "" };
+  const empty: ParsedNotes = { module: null, courseSessions: [], topics: "", course: "", sections: [], memo: "" };
   if (!raw) return empty;
   if (raw.startsWith(NOTES_PREFIX_V4)) {
     try {
@@ -47,7 +55,13 @@ export function parseNotes(raw: string | null | undefined): ParsedNotes {
             subjectIds: Array.isArray(obj.subjectIds) ? obj.subjectIds.map(String) : [],
           }
         : null;
-      return { ...empty, module, topics: obj.studied || "" };
+      return {
+        ...empty,
+        module,
+        topics: obj.studied || "",
+        sections: Array.isArray(obj.sections) ? obj.sections.map(String) : [],
+        memo: obj.memo || "",
+      };
     } catch {
       return { ...empty, topics: raw };
     }
@@ -81,11 +95,14 @@ export function parseNotes(raw: string | null | undefined): ParsedNotes {
 
 export function serializeNotes(notes: SessionNotes): string {
   const studied = notes.studied.trim();
-  if (!notes.module && !studied) return "";
+  const memo = (notes.memo ?? "").trim();
+  if (!notes.module && !studied && !memo) return "";
   return NOTES_PREFIX_V4 + JSON.stringify({
     moduleId: notes.module?.id ?? null,
     moduleName: notes.module?.name ?? "",
     subjectIds: notes.module?.subjectIds ?? [],
+    sections: notes.sections ?? [],
     studied,
+    memo,
   });
 }

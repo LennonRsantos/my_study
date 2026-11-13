@@ -45,8 +45,26 @@ interface SubjectAllocation {
   categoryIds: string[];
   moduleId: string | null;
   moduleSubjectIds: string[];
+  /** Submodules (lesson sections) studied; their lessons get marked completed. */
+  sections: string[];
   studied: string;
+  memo: string;
 }
+
+interface ModulePart { name: string; lessonIds: string[]; done: boolean }
+
+/** What can be picked in a module, in lesson order: each submodule as one item, each lesson outside a submodule on its own. */
+const moduleParts = (m: CourseModule): ModulePart[] => {
+  const parts = new Map<string, ModulePart>();
+  for (const l of m.lessons ?? []) {
+    const key = l.section ? `s:${l.section}` : `l:${l.id}`;
+    const part = parts.get(key) ?? { name: l.section ?? l.name, lessonIds: [], done: true };
+    part.lessonIds.push(l.id);
+    part.done &&= l.completed;
+    parts.set(key, part);
+  }
+  return [...parts.values()];
+};
 
 const blankAllocation = (): SubjectAllocation => ({
   subjectId: "",
@@ -55,13 +73,15 @@ const blankAllocation = (): SubjectAllocation => ({
   categoryIds: [],
   moduleId: null,
   moduleSubjectIds: [],
+  sections: [],
   studied: "",
+  memo: "",
 });
 
 export default function SessionsPage() {
   const { sessions, subjects, addSession, updateSession, deleteSession } = useStudy();
   const { user } = useAuth();
-  const { modules, modulesFor, setModuleCompleted } = useCourseModules();
+  const { modules, modulesFor, setModuleCompleted, setLessonsCompleted } = useCourseModules();
   const { paths } = useLearningPaths();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, getDescendantIds, addCategory, updateCategory, deleteCategory } = useCategories("session");
   const [editing, setEditing] = useState<StudySession | null>(null);
@@ -98,20 +118,42 @@ export default function SessionsPage() {
     const mod = alloc.moduleId ? modules.find((m) => m.id === alloc.moduleId) : undefined;
     return serializeNotes({
       module: mod ? { id: mod.id, name: mod.name, subjectIds: alloc.moduleSubjectIds } : null,
+      sections: mod ? alloc.sections : [],
       studied: alloc.studied,
+      memo: alloc.memo,
     });
   };
 
-  // Marks each selected module completed. Returns names of modules newly completed.
-  const completeModules = async (moduleIds: string[]): Promise<string[]> => {
-    const names: string[] = [];
-    for (const id of Array.from(new Set(moduleIds))) {
-      const mod = modules.find((m) => m.id === id);
-      if (!mod || mod.completed) continue;
-      await setModuleCompleted(id, true);
-      names.push(mod.name);
+  // Marks the chosen submodules' lessons completed, or the whole module when none chosen.
+  // One call per module: setLessonsCompleted reads module state from this render.
+  // Returns what got newly completed, for the toast.
+  const completeModules = async (allocations: SubjectAllocation[]): Promise<string[]> => {
+    const sectionsByModule = new Map<string, Set<string>>();
+    for (const a of allocations) {
+      if (!a.moduleId) continue;
+      const set = sectionsByModule.get(a.moduleId) ?? new Set<string>();
+      a.sections.forEach((x) => set.add(x));
+      sectionsByModule.set(a.moduleId, set);
     }
-    return names;
+    const done: string[] = [];
+    for (const [id, sections] of sectionsByModule) {
+      const mod = modules.find((m) => m.id === id);
+      if (!mod) continue;
+      if (sections.size === 0) {
+        if (mod.completed) continue;
+        await setModuleCompleted(id, true);
+        done.push(`módulo ${mod.name}`);
+        continue;
+      }
+      const lessons = mod.lessons ?? [];
+      const picked = moduleParts(mod).filter((p) => sections.has(p.name));
+      const ids = picked.flatMap((p) => p.lessonIds);
+      const fresh = picked.filter((p) => !p.done).map((p) => p.name);
+      await setLessonsCompleted(id, ids, true);
+      if (fresh.length > 0) done.push(fresh.join(", "));
+      if (!mod.completed && lessons.every((l) => l.completed || ids.includes(l.id))) done.push(`módulo ${mod.name}`);
+    }
+    return done;
   };
 
   const handleSave = async (
@@ -157,9 +199,9 @@ export default function SessionsPage() {
           }
         }
       }
-      const done = await completeModules(allocations.map((a) => a.moduleId).filter((id): id is string => !!id));
+      const done = await completeModules(allocations);
       const base_msg = editing ? "Sessão atualizada" : allocations.length > 1 ? "Sessões registradas" : "Sessão registrada";
-      toast.success(done.length > 0 ? `${base_msg} · módulo ${done.join(", ")} concluído` : base_msg);
+      toast.success(done.length > 0 ? `${base_msg} · concluído: ${done.join("; ")}` : base_msg);
       setEditing(null);
       setDialogOpen(false);
     } catch (e: any) {
@@ -248,7 +290,7 @@ export default function SessionsPage() {
                       <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
                         {s.startTime}–{s.endTime}
                       </p>
-                      {(stepLabel || n.module || n.courseSessions.length > 0 || n.topics) && (
+                      {(stepLabel || n.module || n.courseSessions.length > 0 || n.topics || n.memo) && (
                         <dl className="mt-2 space-y-1.5 text-xs">
                           {stepLabel && (
                             <div>
@@ -258,8 +300,14 @@ export default function SessionsPage() {
                           )}
                           {n.module && (
                             <div>
-                              <dt className="inline font-medium text-foreground">Módulo concluído: </dt>
+                              <dt className="inline font-medium text-foreground">{n.sections.length > 0 ? "Módulo: " : "Módulo concluído: "}</dt>
                               <dd className="inline text-muted-foreground">{n.module.name || "—"}</dd>
+                            </div>
+                          )}
+                          {n.sections.length > 0 && (
+                            <div>
+                              <dt className="inline font-medium text-foreground">Concluído no módulo: </dt>
+                              <dd className="inline text-muted-foreground">{n.sections.join(", ")}</dd>
                             </div>
                           )}
                           {n.module && n.module.subjectIds.length > 0 && (
@@ -286,6 +334,12 @@ export default function SessionsPage() {
                             <div>
                               <dt className="inline font-medium text-foreground">Estudado: </dt>
                               <dd className="inline text-muted-foreground">{n.topics}</dd>
+                            </div>
+                          )}
+                          {n.memo && (
+                            <div>
+                              <dt className="inline font-medium text-foreground">Notas: </dt>
+                              <dd className="inline whitespace-pre-line text-muted-foreground">{n.memo}</dd>
                             </div>
                           )}
                         </dl>
@@ -363,7 +417,9 @@ function SessionForm({
         categoryIds: initialCategories,
         moduleId: n.module?.id ?? null,
         moduleSubjectIds: n.module?.subjectIds ?? [],
+        sections: n.sections,
         studied: n.topics,
+        memo: n.memo,
       }];
     }
     return [blankAllocation()];
@@ -422,7 +478,12 @@ function SessionForm({
     : !noDuplicates
     ? "Há matérias repetidas — cada bloco deve ter uma matéria diferente."
     : allocations.some((a) => selectableModules(a).length > 0 && !a.moduleId)
-    ? "Selecione o módulo concluído em cada curso."
+    ? "Selecione o módulo em cada curso."
+    : allocations.some((a) => {
+        const mod = selectableModules(a).find((m) => m.id === a.moduleId);
+        return mod && moduleParts(mod).length > 0 && a.sections.length === 0;
+      })
+    ? "Marque o que foi estudado no módulo."
     : null;
 
   const canSave = !validationError && allocations.length > 0;
@@ -530,7 +591,7 @@ function SessionForm({
               <div>
                 <Select
                   value={alloc.courseId || "__none__"}
-                  onValueChange={(v) => updateAllocation(idx, { courseId: v === "__none__" ? null : v, moduleId: null, moduleSubjectIds: [] })}
+                  onValueChange={(v) => updateAllocation(idx, { courseId: v === "__none__" ? null : v, moduleId: null, moduleSubjectIds: [], sections: [] })}
                 >
                   <SelectTrigger className="h-9 text-xs">
                     <SelectValue placeholder="Curso (opcional)" />
@@ -551,14 +612,15 @@ function SessionForm({
               {selectableModules(alloc).length > 0 && (() => {
                 const mod = selectableModules(alloc).find((m) => m.id === alloc.moduleId);
                 const modSubjects = mod ? subjects.filter((s) => mod.subject_ids.includes(s.id)) : [];
+                const parts = mod ? moduleParts(mod) : [];
                 return (
                   <div className="space-y-2">
                     <Select
                       value={alloc.moduleId || ""}
-                      onValueChange={(v) => updateAllocation(idx, { moduleId: v, moduleSubjectIds: [] })}
+                      onValueChange={(v) => updateAllocation(idx, { moduleId: v, moduleSubjectIds: [], sections: [] })}
                     >
                       <SelectTrigger className="h-9 text-xs">
-                        <SelectValue placeholder="Módulo concluído (obrigatório)" />
+                        <SelectValue placeholder="Módulo (obrigatório)" />
                       </SelectTrigger>
                       <SelectContent>
                         {selectableModules(alloc).map((m) => (
@@ -568,6 +630,30 @@ function SessionForm({
                         ))}
                       </SelectContent>
                     </Select>
+                    {parts.length > 0 && (
+                      <div role="group" aria-label="Estudado neste módulo" className="space-y-1.5 rounded-md border bg-background/50 p-2">
+                        <p className="text-xs font-medium text-muted-foreground">Estudado neste módulo (marca as aulas como concluídas)</p>
+                        <div className="max-h-48 space-y-1.5 overflow-y-auto">
+                          {parts.map((p) => (
+                            <label key={p.lessonIds[0]} className="flex cursor-pointer items-center gap-2 text-xs">
+                              <Checkbox
+                                checked={alloc.sections.includes(p.name)}
+                                onCheckedChange={(c) =>
+                                  updateAllocation(idx, {
+                                    sections: c ? [...alloc.sections, p.name] : alloc.sections.filter((x) => x !== p.name),
+                                  })
+                                }
+                              />
+                              <span className="min-w-0 flex-1">{p.name}</span>
+                              {p.lessonIds.length > 1 && (
+                                <span className="shrink-0 tabular-nums text-muted-foreground">{p.lessonIds.length} aulas</span>
+                              )}
+                              {p.done && <span className="shrink-0 text-muted-foreground">concluído</span>}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {modSubjects.length > 0 && (
                       <div className="flex flex-wrap gap-x-4 gap-y-2">
                         {modSubjects.map((s) => (
@@ -597,6 +683,15 @@ function SessionForm({
                   onChange={(e) => updateAllocation(idx, { studied: e.target.value })}
                   rows={2}
                   placeholder="Ex: Listas ligadas, pilhas e exercícios do capítulo 3"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Notas (opcional)</Label>
+                <Textarea
+                  value={alloc.memo}
+                  onChange={(e) => updateAllocation(idx, { memo: e.target.value })}
+                  rows={2}
+                  placeholder="Ex: Revisar generics com keyof; dúvida sobre decorators"
                 />
               </div>
               {categories.length > 0 && (

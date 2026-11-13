@@ -326,12 +326,17 @@ export default function CalendarPage() {
                       </p>
                       {(() => {
                         const n = parseNotes(s.notes);
-                        if (!n.module && n.courseSessions.length === 0 && !n.topics) return null;
+                        if (!n.module && n.courseSessions.length === 0 && !n.topics && !n.memo) return null;
                         return (
                           <div className="mt-1 space-y-0.5">
                             {n.module && (
                               <p className="text-xs text-muted-foreground">
-                                <span className="font-semibold text-foreground">Módulo concluído:</span> {n.module.name || "—"}
+                                <span className="font-semibold text-foreground">{n.sections.length > 0 ? "Módulo:" : "Módulo concluído:"}</span> {n.module.name || "—"}
+                              </p>
+                            )}
+                            {n.sections.length > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                <span className="font-semibold text-foreground">Concluído no módulo:</span> {n.sections.join(", ")}
                               </p>
                             )}
                             {n.module && n.module.subjectIds.length > 0 && (
@@ -355,6 +360,11 @@ export default function CalendarPage() {
                             {n.topics && (
                               <p className="text-xs text-muted-foreground">
                                 <span className="font-semibold text-foreground">Estudado:</span> {n.topics}
+                              </p>
+                            )}
+                            {n.memo && (
+                              <p className="whitespace-pre-line text-xs text-muted-foreground">
+                                <span className="font-semibold text-foreground">Notas:</span> {n.memo}
                               </p>
                             )}
                           </div>

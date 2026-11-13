@@ -17,7 +17,30 @@ describe("serializeNotes / parseNotes (v4)", () => {
       courseSessions: [],
       topics: "Listas ligadas",
       course: "",
+      sections: [],
+      memo: "",
     });
+  });
+
+  it("round-trips submodules and notes", () => {
+    const parsed = parseNotes(serializeNotes({
+      module: { id: "m1", name: "TS", subjectIds: [] },
+      studied: "",
+      sections: ["Generics", "Classes"],
+      memo: "  revisar keyof  ",
+    }));
+    expect(parsed.sections).toEqual(["Generics", "Classes"]);
+    expect(parsed.memo).toBe("revisar keyof");
+  });
+
+  it("keeps notes alone", () => {
+    expect(parseNotes(serializeNotes({ module: null, studied: "", memo: "x" })).memo).toBe("x");
+  });
+
+  it("reads old v4 notes without sections or memo", () => {
+    const parsed = parseNotes('@@v4@@{"moduleId":"m1","moduleName":"A","subjectIds":[],"studied":"y"}');
+    expect(parsed.sections).toEqual([]);
+    expect(parsed.memo).toBe("");
   });
 
   it("keeps studied text without a module", () => {
@@ -38,6 +61,8 @@ describe("parseNotes (legacy)", () => {
       courseSessions: [],
       topics: "Pomodoro (25min foco)",
       course: "",
+      sections: [],
+      memo: "",
     });
   });
 
