@@ -24,6 +24,8 @@ export interface DailyGoal {
   dailyLimitHours: number | null;
   /** Longest continuous block before the planner suggests a break. */
   maxBlockMinutes: number;
+  /** ISO weekdays (1 Seg .. 7 Dom) the user can study; null = every day. */
+  availableDays: number[] | null;
 }
 
 export type PracticeType = 'exercise' | 'project' | 'challenge' | 'code_review' | 'reading' | 'other';

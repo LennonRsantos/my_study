@@ -6,17 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Settings2 } from "lucide-react";
-import type { PlanPriority, PlanSettings } from "@/lib/planner";
-
-const WEEKDAYS: { iso: number; short: string; long: string }[] = [
-  { iso: 1, short: "Seg", long: "segunda" },
-  { iso: 2, short: "Ter", long: "terça" },
-  { iso: 3, short: "Qua", long: "quarta" },
-  { iso: 4, short: "Qui", long: "quinta" },
-  { iso: 5, short: "Sex", long: "sexta" },
-  { iso: 6, short: "Sáb", long: "sábado" },
-  { iso: 7, short: "Dom", long: "domingo" },
-];
+import { WEEKDAYS, type PlanPriority, type PlanSettings } from "@/lib/planner";
 
 const PRIORITY_LABEL: Record<PlanPriority, string> = { 2: "Alta", 1: "Normal", 0: "Baixa" };
 
@@ -75,7 +65,7 @@ export default function PlanSettingsDialog({ name, initial, workloadHours, onSav
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Plano de {name}</DialogTitle>
-          <DialogDescription>Defina prazo ou meta semanal. A meta semanal, se informada, tem prioridade sobre o prazo. Sem nenhum dos dois, o curso divide o tempo livre do dia com os outros.</DialogDescription>
+          <DialogDescription>Defina prazo ou meta semanal. A meta semanal, se informada, tem prioridade sobre o prazo. Sem nenhum dos dois, o item divide o tempo livre do dia com os outros (ou espera na fila, se estiver pendente).</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -118,7 +108,7 @@ export default function PlanSettingsDialog({ name, initial, workloadHours, onSav
           </div>
 
           <div className="space-y-2">
-            <Label>Dias preferidos (vazio = todos)</Label>
+            <Label>Dias preferidos (vazio = todos os dias disponíveis)</Label>
             <ToggleGroup type="multiple" value={days.map(String)} onValueChange={(v) => setDays(v.map(Number))} className="flex-wrap justify-start">
               {WEEKDAYS.map((d) => (
                 <ToggleGroupItem key={d.iso} value={String(d.iso)} aria-label={d.long} className="h-8 px-2.5 text-xs">

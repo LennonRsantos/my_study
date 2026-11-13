@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { LearningPathStep } from "@/hooks/useLearningPaths";
 import {
-  buildTree, effectiveStatus, flattenNode, isLocked, leafSteps, parseRoadmapJson, roadmapRows, stepHours,
+  buildTree, effectiveStatus, flattenNode, isLocked, leafHours, leafSteps, matchingStep, parseRoadmapJson, roadmapRows, stepHours,
 } from "@/lib/learningPath";
 
 const step = (id: string, patch: Partial<LearningPathStep> = {}): LearningPathStep => ({
@@ -25,6 +25,37 @@ describe("buildTree / leafSteps", () => {
   it("keeps only steps without children", () => {
     const leaves = leafSteps([step("a"), step("a1", { parentId: "a" }), step("b")]);
     expect(leaves.map((s) => s.id)).toEqual(["a1", "b"]);
+  });
+});
+
+describe("leafHours", () => {
+  it("splits the path total evenly when no step has hours", () => {
+    const leaves = [step("a"), step("b"), step("c"), step("d")];
+    expect(leaves.map(leafHours(leaves, 8))).toEqual([2, 2, 2, 2]);
+    expect(leafHours([], 8)(step("x"))).toBe(8);
+  });
+
+  it("keeps the steps' own hours when any step has them", () => {
+    const leaves = [step("a", { estimatedHours: 3 }), step("b")];
+    expect(leaves.map(leafHours(leaves, 8))).toEqual([3, 0]);
+  });
+});
+
+describe("matchingStep", () => {
+  it("matches name ignoring case and accents before subject", () => {
+    const steps = [step("bySubject", { subjectId: "s" }), step("byName", { name: "Lógica" })];
+    expect(matchingStep(steps, "s", [" logica "])?.id).toBe("byName");
+    expect(matchingStep(steps, "s", ["outra"])?.id).toBe("bySubject");
+    expect(matchingStep(steps, "", ["outra"])).toBeUndefined();
+  });
+
+  it("skips completed and parent steps", () => {
+    const steps = [
+      step("done", { name: "TS", status: "completed" }),
+      step("parent", { name: "TS" }),
+      step("child", { parentId: "parent", name: "Generics" }),
+    ];
+    expect(matchingStep(steps, "", ["ts"])).toBeUndefined();
   });
 });
 
@@ -141,6 +172,21 @@ describe("parseRoadmapJson", () => {
         }],
       },
     });
+  });
+
+  it("sorts steps and topics by their order field", () => {
+    const result = parseRoadmapJson(JSON.stringify({
+      title: "TS",
+      steps: [
+        { order: 2, name: "Types", topics: [{ name: "b", order: 2 }, { name: "a", order: 1 }] },
+        { order: 1, name: "Intro", topics: [{ name: "y" }, { name: "x" }] },
+      ],
+    }));
+    const leaf = (name: string) => ({ name, topics: [] });
+    expect(result.ok && result.roadmap.steps).toEqual([
+      { name: "Intro", topics: [leaf("y"), leaf("x")] },
+      { name: "Types", topics: [leaf("a"), leaf("b")] },
+    ]);
   });
 
   it("names the roadmap when the JSON has no name", () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import type { ItemStatus } from "@/lib/planner";
 
 export interface Course {
   id: string;
@@ -8,6 +9,8 @@ export interface Course {
   description: string;
   color: string;
   completed: boolean;
+  /** Pending / in progress / completed; a DB trigger keeps it in step with `completed`. */
+  status: ItemStatus;
   completedAt: string | null;
   subjectIds: string[];
   targetHours: number;
@@ -27,6 +30,7 @@ export function useCourses() {
     setCourses((coursesData || []).map((c: any) => ({
       id: c.id, name: c.name, description: c.description || "", color: c.color,
       completed: c.completed, completedAt: c.completed_at,
+      status: c.status === "pending" || c.status === "completed" ? c.status : c.completed ? "completed" : "in_progress",
       targetHours: Number(c.target_hours) || 0,
       subjectIds: links.filter((l: any) => l.course_id === c.id).map((l: any) => l.subject_id),
     })));

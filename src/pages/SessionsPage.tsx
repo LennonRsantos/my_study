@@ -30,7 +30,8 @@ import { formatDuration, minutesToTime, timeToMinutes } from "@/lib/format";
 import { Checkbox } from "@/components/ui/checkbox";
 import { parseNotes, serializeNotes } from "@/lib/sessionNotes";
 import { useCourseModules, CourseModule } from "@/hooks/useCourseModules";
-import { useLearningPaths } from "@/hooks/useLearningPaths";
+import { useLearningPaths, LearningPath } from "@/hooks/useLearningPaths";
+import { buildTree, flattenNode, leafSteps, matchingStep } from "@/lib/learningPath";
 
 interface CourseOption {
   id: string;
@@ -49,6 +50,10 @@ interface SubjectAllocation {
   sections: string[];
   studied: string;
   memo: string;
+  pathId: string | null;
+  /** Path step this block is linked to; completed on save when completeStep. */
+  stepId: string | null;
+  completeStep: boolean;
 }
 
 interface ModulePart { name: string; lessonIds: string[]; done: boolean }
@@ -76,13 +81,16 @@ const blankAllocation = (): SubjectAllocation => ({
   sections: [],
   studied: "",
   memo: "",
+  pathId: null,
+  stepId: null,
+  completeStep: true,
 });
 
 export default function SessionsPage() {
   const { sessions, subjects, addSession, updateSession, deleteSession } = useStudy();
   const { user } = useAuth();
   const { modules, modulesFor, setModuleCompleted, setLessonsCompleted } = useCourseModules();
-  const { paths } = useLearningPaths();
+  const { paths, setStepsStatus } = useLearningPaths();
   const { categories, getCategoriesForItem, setItemCategories, getItemsInCategory, getDescendantIds, addCategory, updateCategory, deleteCategory } = useCategories("session");
   const [editing, setEditing] = useState<StudySession | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -169,7 +177,7 @@ export default function SessionsPage() {
           id: editing.id,
           subjectId: alloc.subjectId,
           courseId: alloc.courseId,
-          stepId: editing.stepId,
+          stepId: alloc.stepId,
           date: base.date,
           startTime: base.startTime,
           endTime,
@@ -188,6 +196,7 @@ export default function SessionsPage() {
             id,
             subjectId: alloc.subjectId,
             courseId: alloc.courseId,
+            stepId: alloc.stepId,
             date: base.date,
             startTime: segStart,
             endTime: segEnd,
@@ -200,6 +209,13 @@ export default function SessionsPage() {
         }
       }
       const done = await completeModules(allocations);
+      const stepsToComplete = paths.flatMap((p) => p.steps).filter(
+        (st) => st.status !== "completed" && allocations.some((a) => a.completeStep && a.stepId === st.id),
+      );
+      if (stepsToComplete.length > 0) {
+        await setStepsStatus(stepsToComplete.map((st) => st.id), "completed");
+        done.push(...stepsToComplete.map((st) => `etapa ${st.name}`));
+      }
       const base_msg = editing ? "Sessão atualizada" : allocations.length > 1 ? "Sessões registradas" : "Sessão registrada";
       toast.success(done.length > 0 ? `${base_msg} · concluído: ${done.join("; ")}` : base_msg);
       setEditing(null);
@@ -244,6 +260,7 @@ export default function SessionsPage() {
                   initialCategories={editing ? getCategoriesForItem(editing.id, "session").map((c) => c.id) : []}
                   initial={editing}
                   modulesFor={modulesFor}
+                  paths={paths}
                   onSave={handleSave}
                   onCancel={() => { setDialogOpen(false); setEditing(null); }}
                 />
@@ -386,6 +403,7 @@ function SessionForm({
   initialCategories,
   initial,
   modulesFor,
+  paths,
   onSave,
   onCancel,
 }: {
@@ -395,6 +413,7 @@ function SessionForm({
   initialCategories: string[];
   initial: StudySession | null;
   modulesFor: (courseId: string) => CourseModule[];
+  paths: LearningPath[];
   onSave: (
     base: { date: string; startTime: string },
     allocations: SubjectAllocation[],
@@ -420,6 +439,9 @@ function SessionForm({
         sections: n.sections,
         studied: n.topics,
         memo: n.memo,
+        pathId: paths.find((p) => p.steps.some((st) => st.id === initial.stepId))?.id ?? null,
+        stepId: initial.stepId ?? null,
+        completeStep: !paths.some((p) => p.steps.some((st) => st.id === initial.stepId && st.status === "completed")),
       }];
     }
     return [blankAllocation()];
@@ -441,8 +463,38 @@ function SessionForm({
     [allocations],
   );
 
+  // Step of the chosen path matching the block's subject, module or studied submodules.
+  const suggestStep = (a: SubjectAllocation): string | null => {
+    const path = paths.find((p) => p.id === a.pathId);
+    if (!path) return null;
+    const mod = a.courseId ? modulesFor(a.courseId).find((m) => m.id === a.moduleId) : undefined;
+    const subjectName = subjects.find((s) => s.id === a.subjectId)?.name ?? "";
+    return matchingStep(path.steps, a.subjectId, [subjectName, mod?.name ?? "", ...a.sections])?.id ?? null;
+  };
   const updateAllocation = (idx: number, patch: Partial<SubjectAllocation>) => {
-    setAllocations((prev) => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
+    setAllocations((prev) => prev.map((a, i) => {
+      if (i !== idx) return a;
+      const next = { ...a, ...patch };
+      // Suggest until a step is picked; never overrides a manual choice.
+      if (next.pathId && !next.stepId) next.stepId = suggestStep(next);
+      return next;
+    }));
+  };
+  const selectablePaths = (a: SubjectAllocation) =>
+    paths.filter((p) => p.id === a.pathId || leafSteps(p.steps).some((st) => st.status !== "completed"));
+  // Pending leaf steps in tree order, plus the linked step when editing.
+  const selectableSteps = (a: SubjectAllocation) => {
+    const path = paths.find((p) => p.id === a.pathId);
+    if (!path) return [];
+    const leafIds = new Set(leafSteps(path.steps).map((st) => st.id));
+    const byId = new Map(path.steps.map((st) => [st.id, st]));
+    return buildTree(path.steps)
+      .flatMap(flattenNode)
+      .filter((st) => st.id === a.stepId || (leafIds.has(st.id) && st.status !== "completed"))
+      .map((st) => {
+        const parent = st.parentId ? byId.get(st.parentId) : undefined;
+        return { id: st.id, label: parent ? `${parent.name} › ${st.name}` : st.name, done: st.status === "completed" };
+      });
   };
   const addAllocation = () => {
     // Switch off end-time mode when multiple allocations
@@ -672,6 +724,51 @@ function SessionForm({
                           </label>
                         ))}
                       </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {selectablePaths(alloc).length > 0 && (() => {
+                const steps = selectableSteps(alloc);
+                const step = steps.find((st) => st.id === alloc.stepId);
+                return (
+                  <div className="space-y-2">
+                    <Select
+                      value={alloc.pathId || "__none__"}
+                      onValueChange={(v) => updateAllocation(idx, { pathId: v === "__none__" ? null : v, stepId: null, completeStep: true })}
+                    >
+                      <SelectTrigger className="h-9 text-xs" aria-label="Trilha (opcional)">
+                        <SelectValue placeholder="Trilha (opcional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Sem trilha</SelectItem>
+                        {selectablePaths(alloc).map((p) => (
+                          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {alloc.pathId && (
+                      <>
+                        <Select value={alloc.stepId || ""} onValueChange={(v) => updateAllocation(idx, { stepId: v })}>
+                          <SelectTrigger className="h-9 text-xs" aria-label="Etapa da trilha">
+                            <SelectValue placeholder={steps.length > 0 ? "Etapa da trilha" : "Nenhuma etapa pendente"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {steps.map((st) => (
+                              <SelectItem key={st.id} value={st.id}>{st.done ? `${st.label} (já concluída)` : st.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {step && !step.done && (
+                          <label className="flex cursor-pointer items-center gap-2 text-xs">
+                            <Checkbox
+                              checked={alloc.completeStep}
+                              onCheckedChange={(c) => updateAllocation(idx, { completeStep: c === true })}
+                            />
+                            Concluir etapa ao salvar
+                          </label>
+                        )}
+                      </>
                     )}
                   </div>
                 );

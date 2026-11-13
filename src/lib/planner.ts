@@ -1,4 +1,4 @@
-import { addDays, getISODay } from "date-fns";
+import { addDays, addMonths, endOfMonth, getISODay, parseISO } from "date-fns";
 import { toDayKey } from "./streak";
 
 /**
@@ -6,9 +6,11 @@ import { toDayKey } from "./streak";
  * Suggests blocks per day from plan settings. Never stores "done": callers derive it from real sessions.
  */
 
-export type PlanKind = "course" | "language";
+export type PlanKind = "course" | "language" | "path";
 export type PlanPriority = 0 | 1 | 2; // 0 baixa, 1 normal, 2 alta
 export type PlanStatus = "done" | "ahead" | "ontrack" | "behind" | "nodata";
+/** What the user says about an item: not started yet, being studied, or finished. */
+export type ItemStatus = "pending" | "in_progress" | "completed";
 
 export interface PlanSettings {
   deadline: string | null; // YYYY-MM-DD
@@ -29,7 +31,8 @@ export interface PlanItem extends PlanSettings {
   color: string;
   remainingHours: number | null; // null = unknown total
   paceHours: number; // hours per week, last 28 days
-  modules?: PlanModule[]; // pending modules in order; only for module-based courses
+  modules?: PlanModule[]; // pending modules or path steps in order
+  status?: Exclude<ItemStatus, "completed">; // default in_progress; pending items without a goal wait in the queue
 }
 
 export interface PlanBlock {
@@ -39,8 +42,8 @@ export interface PlanBlock {
   label: string | null;
 }
 
-/** How the scheduled pace was chosen: explicit weekly goal, deadline, share of the free daily time, or none. */
-export type PlanMode = "weekly" | "deadline" | "share" | "none";
+/** How the scheduled pace was chosen: explicit weekly goal, deadline, share of the free daily time, queue, or none. */
+export type PlanMode = "weekly" | "deadline" | "share" | "queue" | "none";
 
 export interface PlanSuggestion {
   minDeadline: Date | null; // earliest date the daily limit allows; null = beyond the scan window
@@ -58,6 +61,7 @@ export interface PlanRow {
   unplacedHours: number; // hours cut by the daily budget
   feasible: boolean; // false when the deadline cannot be met within the daily limit
   suggestion: PlanSuggestion | null; // set when not feasible
+  startDate: string | null; // first planned day; for queued items, when they start
 }
 
 export interface PlanInput {
@@ -67,7 +71,19 @@ export interface PlanInput {
   frozen: Set<string>; // YYYY-MM-DD frozen days (skipped)
   horizonDays?: number;
   reserved?: Map<string, number>; // dayKey -> minutes already taken (e.g. review blocks)
+  availableDays?: number[] | null; // ISO weekdays the user can study; null/empty = every day
 }
+
+/** ISO weekdays with Portuguese labels, Monday first. */
+export const WEEKDAYS: { iso: number; short: string; long: string }[] = [
+  { iso: 1, short: "Seg", long: "segunda" },
+  { iso: 2, short: "Ter", long: "terça" },
+  { iso: 3, short: "Qua", long: "quarta" },
+  { iso: 4, short: "Qui", long: "quinta" },
+  { iso: 5, short: "Sex", long: "sexta" },
+  { iso: 6, short: "Sáb", long: "sábado" },
+  { iso: 7, short: "Dom", long: "domingo" },
+];
 
 const STEP = 15; // minutes per block granularity
 const SLOT_LIMIT = 1100; // max days scanned when counting slots to a deadline
@@ -84,6 +100,10 @@ function compareDeadline(a: string | null, b: string | null): number {
   if (!b) return -1;
   return a.localeCompare(b);
 }
+
+/** A day counts when the user is available on it and the item prefers it. An empty list means every day. */
+export const dayAllowed = (availableDays: number[] | null | undefined, itemDays: number[] | null | undefined) => (iso: number) =>
+  (!availableDays?.length || availableDays.includes(iso)) && (!itemDays?.length || itemDays.includes(iso));
 
 function countSlots(today: Date, deadline: string, allowed: (iso: number) => boolean, frozen: Set<string>): number {
   let n = 0;
@@ -124,7 +144,7 @@ function moduleLabel(mods: PlanModule[], cum: number[], from: number, minutes: n
 }
 
 export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBlock[] } {
-  const { items, today, dailyBudgetHours, frozen, horizonDays = 14, reserved } = input;
+  const { items, today, dailyBudgetHours, frozen, horizonDays = 14, reserved, availableDays } = input;
   const todayKey = toDayKey(today);
   const horizon = Array.from({ length: horizonDays }, (_, i) => {
     const d = addDays(today, i);
@@ -140,9 +160,10 @@ export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBloc
     const mods = it.modules?.filter((m) => m.minutes > 0) ?? [];
     const cum = [0];
     mods.forEach((m) => cum.push(cum[cum.length - 1] + m.minutes));
+    const allowed = dayAllowed(availableDays, it.days);
     return {
-      nDays: it.days?.length ? it.days.length : 7,
-      allowed: (iso: number) => !it.days?.length || it.days.includes(iso),
+      nDays: Math.max(1, [1, 2, 3, 4, 5, 6, 7].filter(allowed).length),
+      allowed,
       mods,
       cum,
       // Never plan more than remains (rounded up to a block step).
@@ -169,6 +190,7 @@ export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBloc
   // Items with an explicit goal or a deadline place first; the rest share what is left of each day.
   const hasGoal = (it: PlanItem) => (it.weeklyHours != null && it.weeklyHours > 0) || !!it.deadline;
   const canShare = (it: PlanItem) => Number.isFinite(budgetMin) && it.remainingHours != null && it.remainingHours > 0;
+  const isPending = (it: PlanItem) => it.status === "pending";
 
   // Highest priority places first; earlier deadline breaks ties; then name.
   const order = [...items].sort(
@@ -246,12 +268,13 @@ export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBloc
       unplacedHours: unplacedMin / 60 < UNPLACED_NOISE_HOURS ? 0 : unplacedMin / 60,
       feasible,
       suggestion,
+      startDate: null,
     });
   }
 
-  // Pass B: no goal, known remaining hours. Each day's free time is split by priority weight;
+  // Pass B: in progress, no goal, known remaining hours. Each day's free time is split by priority weight;
   // an item that finishes frees its share for the others.
-  const sharers = order.filter((i) => !hasGoal(i) && canShare(i)).map((it) => ({ it, c: ctx(it), days: 0 }));
+  const sharers = order.filter((i) => !hasGoal(i) && canShare(i) && !isPending(i)).map((it) => ({ it, c: ctx(it), days: 0 }));
   for (const d of horizon) {
     if (frozen.has(d.key)) continue;
     const active = sharers.filter((s) => s.c.allowed(d.iso) && s.c.capLeft > 0);
@@ -297,13 +320,95 @@ export function buildPlan(input: PlanInput): { rows: PlanRow[]; blocks: PlanBloc
       unplacedHours: 0,
       feasible: true,
       suggestion: null,
+      startDate: null,
     });
   }
 
+  // Pass C: pending, no goal. A queue: what in-progress items leave free goes to the first pending item,
+  // and the next one starts once it is planned to the end (or on days the first cannot use).
+  const queued = order.filter((i) => !hasGoal(i) && canShare(i) && isPending(i)).map((it) => ({ it, c: ctx(it), days: 0 }));
+  for (const d of horizon) {
+    if (frozen.has(d.key)) continue;
+    for (const q of queued) {
+      const room = roomOn(d.key);
+      if (room < STEP) break;
+      if (!q.c.allowed(d.iso) || q.c.capLeft <= 0) continue;
+      place(q.it, q.c, d.key, Math.min(room, q.c.capLeft));
+      q.days++;
+    }
+  }
+
+  const horizonEnd = addDays(today, horizonDays);
+  for (const q of queued) {
+    const rem = q.it.remainingHours as number;
+    const dailyMinutes = q.days > 0 ? Math.round(q.c.placedMin / q.days) : 0;
+    const lastDay = blocks.filter((b) => b.itemKey === q.it.key).reduce((a, b) => (b.date > a ? b.date : a), "");
+    rowsByKey.set(q.it.key, {
+      key: q.it.key,
+      status: "nodata",
+      mode: "queue",
+      requiredWeekly: null,
+      targetWeekly: (dailyMinutes / 60) * q.c.nDays,
+      dailyMinutes,
+      // Fully planned: ends on its last block. Otherwise keep the same daily pace after the horizon.
+      eta: q.c.capLeft <= 0
+        ? (lastDay ? parseISO(lastDay) : null)
+        : dailyMinutes > 0
+          ? earliestFinish(horizonEnd, rem - q.c.placedMin / 60, dailyMinutes / 60, q.c.allowed, frozen)
+          : null,
+      unplacedHours: 0,
+      feasible: true,
+      suggestion: null,
+      startDate: null,
+    });
+  }
+
+  blocks.sort((a, b) => a.date.localeCompare(b.date) || a.itemKey.localeCompare(b.itemKey));
+  const firstDay = new Map<string, string>();
+  for (const b of blocks) if (!firstDay.has(b.itemKey)) firstDay.set(b.itemKey, b.date);
+
   return {
-    rows: items.map((it) => rowsByKey.get(it.key)!),
-    blocks: blocks.sort((a, b) => a.date.localeCompare(b.date) || a.itemKey.localeCompare(b.itemKey)),
+    rows: items.map((it) => ({ ...rowsByKey.get(it.key)!, startDate: firstDay.get(it.key) ?? null })),
+    blocks,
   };
+}
+
+export interface MonthOption {
+  months: number; // 1 = this month
+  deadline: string; // last day of that month, YYYY-MM-DD
+  slots: number; // study days from today to the deadline
+  dailyHours: number; // hours per study day; Infinity without a study day
+}
+
+/** Finishing `remainingHours` by the end of this month, of the next one, and so on. */
+export function monthOptions(
+  remainingHours: number, today: Date, allowed: (iso: number) => boolean, frozen: Set<string>, maxMonths = 12,
+): MonthOption[] {
+  return Array.from({ length: maxMonths }, (_, i) => {
+    const deadline = toDayKey(endOfMonth(addMonths(today, i)));
+    const slots = countSlots(today, deadline, allowed, frozen);
+    return { months: i + 1, deadline, slots, dailyHours: remainingHours <= 0 ? 0 : slots > 0 ? remainingHours / slots : Infinity };
+  });
+}
+
+export interface MonthPick {
+  key: string;
+  options: MonthOption[]; // from monthOptions, at least one
+}
+
+/** Fewest months per pick so the hours per day fit `freeDailyHours`. The heaviest pick is extended first. */
+export function recommendMonths(picks: MonthPick[], freeDailyHours: number): Map<string, number> {
+  const months = new Map(picks.map((p) => [p.key, 1]));
+  const daily = (p: MonthPick) => p.options[months.get(p.key)! - 1].dailyHours;
+  for (;;) {
+    if (picks.reduce((a, p) => a + daily(p), 0) <= freeDailyHours + 1e-9) break;
+    const heaviest = picks
+      .filter((p) => months.get(p.key)! < p.options.length)
+      .reduce<MonthPick | null>((top, p) => (!top || daily(p) > daily(top) ? p : top), null);
+    if (!heaviest) break; // every pick is at its last option: nothing fits
+    months.set(heaviest.key, months.get(heaviest.key)! + 1);
+  }
+  return months;
 }
 
 /** Minutes planned per day, keeping only days above the limit. Feeds the overload alert. */

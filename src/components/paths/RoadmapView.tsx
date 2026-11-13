@@ -1,8 +1,8 @@
-import { useMemo } from "react";
+import { CSSProperties, useMemo } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { STEP_STATUS_LABELS, StepNode, effectiveStatus, isLocked, nodeLeaves } from "@/lib/learningPath";
-import { Box, SIZE, layoutRoadmap } from "@/lib/roadmapLayout";
+import { Rect, SIZE, layoutRoadmap, rowsOf } from "@/lib/roadmapLayout";
 
 interface NodeActions {
   onOpen: (node: StepNode) => void;
@@ -12,8 +12,8 @@ interface NodeActions {
 const LEVEL_TEXT = ["text-sm font-semibold", "text-sm font-medium", "text-xs"];
 const LEVEL_COLOR = ["bg-yellow-300", "bg-amber-200", "bg-amber-100"];
 
-/** One box of the roadmap: check it to complete, click its name to open details. */
-function NodeCard({ node, level, onOpen, onToggle }: NodeActions & { node: StepNode; level: number }) {
+/** One box of the roadmap: check it to complete, click its name to open details. A chip is the half-width form. */
+function NodeCard({ node, level, chip, onOpen, onToggle }: NodeActions & { node: StepNode; level: number; chip?: boolean }) {
   const status = effectiveStatus(node);
   const locked = isLocked(node);
   const leaves = nodeLeaves(node);
@@ -25,8 +25,8 @@ function NodeCard({ node, level, onOpen, onToggle }: NodeActions & { node: StepN
       // The layout math assumes these exact heights
       style={{ height: level === 0 ? SIZE.main : SIZE.card }}
       className={cn(
-        "flex items-center gap-2 rounded-md border-2 border-black px-2.5 text-black transition-shadow hover:shadow-md",
-        LEVEL_TEXT[depth],
+        "flex items-center rounded-md border-2 border-black text-black transition-shadow hover:shadow-md",
+        chip ? "gap-1.5 px-1.5 text-xs" : cn("gap-2 px-2.5", LEVEL_TEXT[depth]),
         status === "completed" ? "bg-success text-success-foreground" : LEVEL_COLOR[depth],
         status === "in_progress" && "ring-2 ring-primary ring-offset-2 ring-offset-card",
       )}
@@ -37,7 +37,10 @@ function NodeCard({ node, level, onOpen, onToggle }: NodeActions & { node: StepN
         onCheckedChange={(c) => onToggle(node, c === true)}
         aria-label={`Marcar ${node.name} como concluído`}
         title={locked ? "Concluído pelas horas ou pelo módulo do curso" : undefined}
-        className="h-5 w-5 shrink-0 border-black bg-white/70 data-[state=checked]:bg-black data-[state=checked]:text-white"
+        className={cn(
+          "shrink-0 border-black bg-white/70 data-[state=checked]:bg-black data-[state=checked]:text-white",
+          chip ? "h-4 w-4" : "h-5 w-5",
+        )}
       />
       <button
         type="button"
@@ -55,29 +58,40 @@ function NodeCard({ node, level, onOpen, onToggle }: NodeActions & { node: StepN
   );
 }
 
-/** A topic, or a group box when it has children: its own card on top, children stacked inside. */
-function Topic({ node, level, ...actions }: NodeActions & { node: StepNode; level: number }) {
-  if (node.children.length === 0) return <NodeCard node={node} level={level} {...actions} />;
+/** A topic list: two short leaves share a row, anything else takes the whole row. Same rows as the layout math. */
+function TopicRows({ nodes, level, className, style, ...actions }: NodeActions & {
+  nodes: StepNode[];
+  level: number;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const paired = new Set(rowsOf(nodes).filter((row) => row.length === 2).flat());
   return (
-    <div
-      className="flex flex-col rounded-md border-2 border-foreground/70 bg-background"
-      // The 2px border is part of SIZE.pad
-      style={{ padding: SIZE.pad - 2, gap: SIZE.gap }}
-    >
-      <NodeCard node={node} level={level} {...actions} />
-      <ul className="flex flex-col" style={{ gap: SIZE.gap }}>
-        {node.children.map((child) => (
-          <li key={child.id}><Topic node={child} level={level + 1} {...actions} /></li>
-        ))}
-      </ul>
-    </div>
+    <ul className={cn("grid grid-cols-2", className)} style={{ gap: SIZE.gap, ...style }}>
+      {nodes.map((node) => (
+        <li key={node.id} className={cn("min-w-0", !paired.has(node) && "col-span-2")}>
+          {node.children.length === 0 ? (
+            <NodeCard node={node} level={level} chip={paired.has(node)} {...actions} />
+          ) : (
+            // A group box: the topic's own card on top, its children inside. The 2px border is part of SIZE.pad.
+            <div
+              className="flex flex-col rounded-md border-2 border-foreground/70 bg-background"
+              style={{ padding: SIZE.pad - 2, gap: SIZE.gap }}
+            >
+              <NodeCard node={node} level={level} {...actions} />
+              <TopicRows nodes={node.children} level={level + 1} {...actions} />
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
-const at = (box: Box) => ({ left: box.x, top: box.y, width: box.w });
+const at = (rect: Rect) => ({ left: rect.x, top: rect.y, width: rect.w });
 
 /**
- * Main nodes follow a line that snakes across three columns, topics fan out beside them.
+ * Main nodes follow a line that snakes across three columns, topics fill the columns beside them.
  * The canvas has a fixed width, so narrow screens scroll it sideways.
  */
 export default function RoadmapView({ tree, onOpen, onToggle }: NodeActions & { tree: StepNode[] }) {
@@ -94,6 +108,14 @@ export default function RoadmapView({ tree, onOpen, onToggle }: NodeActions & { 
             <path key={i} d={d} className="stroke-blue-500" strokeWidth={3} strokeLinecap="round" />
           ))}
         </svg>
+        {layout.frames.map((frame, i) => (
+          <div
+            key={i}
+            aria-hidden
+            className="absolute rounded-lg border border-foreground/40 bg-muted/30"
+            style={{ ...at(frame), height: frame.h }}
+          />
+        ))}
         {/* Boxes are placed against the canvas, but the lists keep data order for keyboard and screen readers */}
         <ol aria-label="Etapas da trilha">
           {layout.mains.map((main, i) => (
@@ -101,15 +123,9 @@ export default function RoadmapView({ tree, onOpen, onToggle }: NodeActions & { 
               <div className="absolute" style={at(main)}>
                 <NodeCard node={main.node} level={0} {...actions} />
               </div>
-              {layout.topics[i].length > 0 && (
-                <ul>
-                  {layout.topics[i].map((topic) => (
-                    <li key={topic.node.id} className="absolute" style={at(topic)}>
-                      <Topic node={topic.node} level={1} {...actions} />
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {layout.stacks[i].map((stack) => (
+                <TopicRows key={stack.nodes[0].id} nodes={stack.nodes} level={1} className="absolute" style={at(stack)} {...actions} />
+              ))}
             </li>
           ))}
         </ol>

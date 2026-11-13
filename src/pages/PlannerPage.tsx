@@ -1,73 +1,70 @@
 import AppLayout from "@/components/AppLayout";
 import PageHeader from "@/components/page/PageHeader";
 import { LoadingState } from "@/components/page/bits";
+import EmptyState from "@/components/page/EmptyState";
+import { Button } from "@/components/ui/button";
 import PlannerTab from "@/components/planner/PlannerTab";
 import PlannerLimitsDialog from "@/components/planner/PlannerLimitsDialog";
 import FiveMinuteDialog from "@/components/planner/FiveMinuteDialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import MonthPlanDialog from "@/components/planner/MonthPlanDialog";
 import { usePlanner } from "@/hooks/usePlanner";
 
 export default function PlannerPage() {
   const p = usePlanner();
-  const shared = {
-    frozen: p.frozen,
-    blocks: p.blocks,
-    done: p.done,
-    reserved: p.reserved,
-    limitHours: p.courseBudget,
-    maxBlockMinutes: p.maxBlockMinutes,
-    onReplace: p.replaceBlocks,
-    onSetStatus: p.setBlockStatus,
-    onReschedule: p.rescheduleBlock,
-  };
 
   return (
     <AppLayout>
-      <PageHeader title="Planejador" description="Prazos, metas semanais e blocos de estudo para seus cursos e idiomas." />
+      <PageHeader
+        title="Planejador"
+        description="Sua rotina de estudos a partir dos dias e horas disponíveis e dos cursos, trilhas e idiomas que você registrou."
+      />
 
-      {p.loading ? (
+      {p.error ? (
+        <EmptyState
+          framed
+          title="Não foi possível carregar o planejador"
+          text="Verifique sua conexão. Se o problema continuar, o banco pode estar sem a atualização mais recente."
+          action={<Button variant="outline" onClick={p.reload}>Tentar de novo</Button>}
+        />
+      ) : p.loading ? (
         <LoadingState />
       ) : (
-        <Tabs defaultValue="cursos" className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <TabsList>
-              <TabsTrigger value="cursos">Cursos</TabsTrigger>
-              <TabsTrigger value="idiomas">Idiomas</TabsTrigger>
-            </TabsList>
-            <div className="flex flex-wrap gap-2">
-              <FiveMinuteDialog courses={p.activeCourses} />
-              <PlannerLimitsDialog
-                dailyLimitHours={p.dailyLimitHours}
-                maxBlockMinutes={p.maxBlockMinutes}
-                goalHours={p.goalHours}
-                onSave={p.saveLimits}
-              />
-            </div>
+        <div className="space-y-6">
+          <div className="flex flex-wrap justify-end gap-2">
+            <FiveMinuteDialog courses={p.activeCourses} />
+            <PlannerLimitsDialog
+              availableDays={p.availableDays}
+              dailyLimitHours={p.dailyLimitHours}
+              maxBlockMinutes={p.maxBlockMinutes}
+              goalHours={p.goalHours}
+              onSave={p.saveAvailability}
+            />
+            <MonthPlanDialog
+              items={p.items}
+              availableDays={p.availableDays}
+              budgetHours={p.budget}
+              dailyLimitHours={p.dailyLimitHours}
+              frozen={p.frozen}
+              onApply={p.applyMonthPlan}
+            />
           </div>
 
-          {/* forceMount keeps an open draft when switching tabs. */}
-          <TabsContent value="cursos" forceMount className="mt-0 data-[state=inactive]:hidden">
-            <PlannerTab
-              kind="course"
-              items={p.courseItems}
-              budgetHours={p.courseBudget}
-              {...shared}
-              emptyText="Nenhum curso aberto. Cadastre um curso em Cursos para planejar."
-              onSaveSettings={(item, s, w) => p.saveSettings("course", item.id, s, w)}
-            />
-          </TabsContent>
-
-          <TabsContent value="idiomas" forceMount className="mt-0 data-[state=inactive]:hidden">
-            <PlannerTab
-              kind="language"
-              items={p.languageItems}
-              budgetHours={p.languageBudget}
-              {...shared}
-              emptyText="Nenhum idioma cadastrado. Cadastre um idioma em Linguagens para planejar."
-              onSaveSettings={(item, s) => p.saveSettings("language", item.id, s)}
-            />
-          </TabsContent>
-        </Tabs>
+          <PlannerTab
+            items={p.items}
+            budgetHours={p.budget}
+            availableDays={p.availableDays}
+            frozen={p.frozen}
+            blocks={p.blocks}
+            done={p.done}
+            reserved={p.reserved}
+            maxBlockMinutes={p.maxBlockMinutes}
+            onSaveSettings={(item, s, w) => p.saveSettings(item.kind, item.id, s, w)}
+            onSetItemStatus={p.setItemStatus}
+            onReplace={p.replaceBlocks}
+            onSetStatus={p.setBlockStatus}
+            onReschedule={p.rescheduleBlock}
+          />
+        </div>
       )}
     </AppLayout>
   );

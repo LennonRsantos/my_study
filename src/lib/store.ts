@@ -77,7 +77,7 @@ export async function deleteSessionDb(id: string): Promise<void> {
 }
 
 // Daily Goal
-export const DEFAULT_GOAL: DailyGoal = { hoursPerDay: 4, dailyLimitHours: null, maxBlockMinutes: 90 };
+export const DEFAULT_GOAL: DailyGoal = { hoursPerDay: 4, dailyLimitHours: null, maxBlockMinutes: 90, availableDays: null };
 
 export async function getGoal(): Promise<DailyGoal> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -88,6 +88,7 @@ export async function getGoal(): Promise<DailyGoal> {
     hoursPerDay: Number(data.hours_per_day),
     dailyLimitHours: data.plan_daily_limit_hours == null ? null : Number(data.plan_daily_limit_hours),
     maxBlockMinutes: data.plan_max_block_minutes ?? DEFAULT_GOAL.maxBlockMinutes,
+    availableDays: data.plan_days?.length ? data.plan_days : null,
   };
 }
 
@@ -98,6 +99,7 @@ export async function saveGoal(goal: DailyGoal): Promise<void> {
     hours_per_day: goal.hoursPerDay,
     plan_daily_limit_hours: goal.dailyLimitHours,
     plan_max_block_minutes: goal.maxBlockMinutes,
+    plan_days: goal.availableDays?.length ? goal.availableDays : null,
   };
   const { data } = await supabase.from("daily_goals").select("id").eq("user_id", user.id).limit(1).maybeSingle();
   const { error } = data

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Plus, CheckCircle, GraduationCap, ChevronRight } from "lucide-react";
@@ -28,6 +29,13 @@ import { useCourseModules, moduleStats, type CourseModule } from "@/hooks/useCou
 import { useCourses, type Course } from "@/hooks/useCourses";
 import type { ImportedModule } from "@/lib/courseImport";
 import { syncReviews } from "@/lib/reviews";
+import type { ItemStatus } from "@/lib/planner";
+
+const STATUS_LABEL: Record<ItemStatus, string> = {
+  pending: "Pendente para começar",
+  in_progress: "Em andamento",
+  completed: "Concluído",
+};
 
 
 export default function CoursesPage() {
@@ -60,6 +68,7 @@ export default function CoursesPage() {
       name: data.name,
       description: data.description,
       color: data.color,
+      status: data.status,
       completed: data.completed,
       target_hours: data.targetHours,
       completed_at: data.completed ? new Date().toISOString() : null,
@@ -274,6 +283,7 @@ function CourseCard({ course, subjects, categories: cats, totalHours, onEdit, on
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-semibold">{course.name}</h3>
             {course.completed && <Badge className="gap-1 font-normal"><CheckCircle className="h-3 w-3" aria-hidden />Concluído</Badge>}
+            {course.status === "pending" && <Badge variant="outline" className="font-normal">Pendente para começar</Badge>}
           </div>
           {course.description && <p className="mt-0.5 text-sm text-muted-foreground">{course.description}</p>}
         </div>
@@ -363,7 +373,7 @@ function CourseForm({ subjects, categories, initialCategories, initial, moduleHo
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
   const [color, setColor] = useState(initial?.color || SUBJECT_COLORS[1]);
-  const [completed, setCompleted] = useState(initial?.completed || false);
+  const [status, setStatus] = useState<ItemStatus>(initial?.status ?? "in_progress");
   const [targetHours, setTargetHours] = useState<string>(initial?.targetHours ? String(initial.targetHours) : "");
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(initial?.subjectIds || []);
   const [selectedCategories, setSelectedCategories] = useState<string[]>(initialCategories);
@@ -435,15 +445,21 @@ function CourseForm({ subjects, categories, initialCategories, initial, moduleHo
           <CategoryPicker categories={categories} selected={selectedCategories} onChange={setSelectedCategories} />
         </div>
       )}
-      {initial && (
-        <label className="flex items-center gap-2 cursor-pointer">
-          <Checkbox checked={completed} onCheckedChange={(v) => setCompleted(!!v)} />
-          <span className="text-sm">Marcar como concluído</span>
-        </label>
-      )}
+      <div className="space-y-2">
+        <Label htmlFor="course-status">Status</Label>
+        <Select value={status} onValueChange={(v) => setStatus(v as ItemStatus)}>
+          <SelectTrigger id="course-status"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {(Object.keys(STATUS_LABEL) as ItemStatus[]).map((v) => (
+              <SelectItem key={v} value={v}>{STATUS_LABEL[v]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">O planejador dá tempo primeiro aos cursos em andamento; os pendentes entram na fila.</p>
+      </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="outline" onClick={onCancel}>Cancelar</Button>
-        <Button disabled={!name.trim()} onClick={() => onSave({ name, description, color, completed, targetHours: parseFloat(targetHours) || 0, subjectIds: selectedSubjects }, selectedCategories)}>
+        <Button disabled={!name.trim()} onClick={() => onSave({ name, description, color, status, completed: status === "completed", targetHours: parseFloat(targetHours) || 0, subjectIds: selectedSubjects }, selectedCategories)}>
           {initial ? "Salvar" : "Criar"}
         </Button>
       </div>

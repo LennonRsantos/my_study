@@ -239,6 +239,7 @@ export type Database = {
           plan_deadline: string | null
           plan_priority: number
           plan_weekly_hours: number | null
+          status: string
           target_hours: number
           updated_at: string
           user_id: string
@@ -255,6 +256,7 @@ export type Database = {
           plan_deadline?: string | null
           plan_priority?: number
           plan_weekly_hours?: number | null
+          status?: string
           target_hours?: number
           updated_at?: string
           user_id: string
@@ -271,6 +273,7 @@ export type Database = {
           plan_deadline?: string | null
           plan_priority?: number
           plan_weekly_hours?: number | null
+          status?: string
           target_hours?: number
           updated_at?: string
           user_id?: string
@@ -282,6 +285,7 @@ export type Database = {
           created_at: string
           hours_per_day: number
           id: string
+          plan_days: number[] | null
           plan_daily_limit_hours: number | null
           plan_max_block_minutes: number
           updated_at: string
@@ -291,6 +295,7 @@ export type Database = {
           created_at?: string
           hours_per_day?: number
           id?: string
+          plan_days?: number[] | null
           plan_daily_limit_hours?: number | null
           plan_max_block_minutes?: number
           updated_at?: string
@@ -300,6 +305,7 @@ export type Database = {
           created_at?: string
           hours_per_day?: number
           id?: string
+          plan_days?: number[] | null
           plan_daily_limit_hours?: number | null
           plan_max_block_minutes?: number
           updated_at?: string
@@ -582,6 +588,7 @@ export type Database = {
           plan_deadline: string | null
           plan_priority: number
           plan_weekly_hours: number | null
+          status: string
           resources: Json
           start_date: string | null
           target_hours: number
@@ -600,6 +607,7 @@ export type Database = {
           plan_deadline?: string | null
           plan_priority?: number
           plan_weekly_hours?: number | null
+          status?: string
           resources?: Json
           start_date?: string | null
           target_hours?: number
@@ -618,6 +626,7 @@ export type Database = {
           plan_deadline?: string | null
           plan_priority?: number
           plan_weekly_hours?: number | null
+          status?: string
           resources?: Json
           start_date?: string | null
           target_hours?: number
@@ -714,6 +723,11 @@ export type Database = {
           estimated_hours: number | null
           id: string
           name: string
+          plan_days: number[] | null
+          plan_deadline: string | null
+          plan_priority: number
+          plan_weekly_hours: number | null
+          status: string
           updated_at: string
           user_id: string
         }
@@ -724,6 +738,11 @@ export type Database = {
           estimated_hours?: number | null
           id?: string
           name: string
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
+          status?: string
           updated_at?: string
           user_id: string
         }
@@ -734,6 +753,11 @@ export type Database = {
           estimated_hours?: number | null
           id?: string
           name?: string
+          plan_days?: number[] | null
+          plan_deadline?: string | null
+          plan_priority?: number
+          plan_weekly_hours?: number | null
+          status?: string
           updated_at?: string
           user_id?: string
         }
@@ -757,6 +781,7 @@ export type Database = {
           block_type: string
           language_id: string | null
           module_id: string | null
+          path_id: string | null
           planned_minutes: number
           review_step: number | null
           status: string
@@ -771,6 +796,7 @@ export type Database = {
           block_type?: string
           language_id?: string | null
           module_id?: string | null
+          path_id?: string | null
           planned_minutes: number
           review_step?: number | null
           status?: string
@@ -785,6 +811,7 @@ export type Database = {
           block_type?: string
           language_id?: string | null
           module_id?: string | null
+          path_id?: string | null
           planned_minutes?: number
           review_step?: number | null
           status?: string

@@ -28,6 +28,15 @@ export function leafSteps<T extends LearningPathStep>(steps: T[]): T[] {
   return steps.filter((s) => !parents.has(s.id));
 }
 
+/**
+ * Hours a leaf step stands for: its own estimate or, when no step has one (imported roadmaps),
+ * an even share of the path's total.
+ */
+export function leafHours<T extends LearningPathStep>(leaves: T[], pathTotal: number): (step: T) => number {
+  const own = leaves.some((s) => s.estimatedHours > 0);
+  return (step) => (own ? step.estimatedHours : pathTotal / Math.max(1, leaves.length));
+}
+
 /** The node and everything below it. */
 export function flattenNode(node: StepNode): StepNode[] {
   return [node, ...node.children.flatMap(flattenNode)];
@@ -48,6 +57,15 @@ export function effectiveStatus(node: StepNode): StepStatus {
 /** True when nothing under the node can be unchecked, because hours or a module keep it completed. */
 export function isLocked(node: StepNode): boolean {
   return nodeLeaves(node).every((n) => n.autoDone);
+}
+
+const normName = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+
+/** Pending leaf step a session is about: same name (case/accent-insensitive) first, else same subject. */
+export function matchingStep<T extends LearningPathStep>(steps: T[], subjectId: string, names: string[]): T | undefined {
+  const pending = leafSteps(steps).filter((s) => s.status !== "completed");
+  const wanted = new Set(names.filter(Boolean).map(normName));
+  return pending.find((s) => wanted.has(normName(s.name))) ?? (subjectId ? pending.find((s) => s.subjectId === subjectId) : undefined);
 }
 
 interface HoursSession {
@@ -97,23 +115,31 @@ const DESCRIPTION_KEYS = ["description", "descricao"];
 const STEP_KEYS = ["steps", "modulos", "etapas", "modules"];
 const TOPIC_KEYS = ["topics", "topicos", "subtopicos", "subtopics", "itens", "items", "children"];
 const WRAPPER_KEYS = ["trilha", "roadmap"];
+const ORDER_KEYS = ["order", "ordem"];
 
 type JsonObject = Record<string, unknown>;
 const isObject = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const firstOf = (o: JsonObject, keys: string[]) => keys.map((k) => o[k]).find((v) => v !== undefined && v !== null);
 
+const orderOf = (v: unknown) => (isObject(v) ? Number(firstOf(v, ORDER_KEYS)) : NaN);
+/** Sorts by the "order" field when every item has one, else keeps the array order. */
+const byOrder = (items: unknown) => {
+  if (!Array.isArray(items) || !items.every((item) => Number.isFinite(orderOf(item)))) return items;
+  return [...items].sort((a, b) => orderOf(a) - orderOf(b));
+};
+
 /** A bare string is a node without topics. */
 const toNode = (v: unknown) => {
   if (typeof v === "string") return { name: v, topics: [] };
   if (!isObject(v)) return v;
-  return { name: firstOf(v, NAME_KEYS), topics: TOPIC_KEYS.flatMap((k) => (Array.isArray(v[k]) ? v[k] : [])) };
+  return { name: firstOf(v, NAME_KEYS), topics: byOrder(TOPIC_KEYS.flatMap((k) => (Array.isArray(v[k]) ? v[k] : []))) };
 };
 
 const toRoadmap = (v: unknown) => {
   if (!isObject(v)) return v;
   const wrapped = firstOf(v, WRAPPER_KEYS);
   const root = isObject(wrapped) ? wrapped : v;
-  return { name: firstOf(root, NAME_KEYS), description: firstOf(root, DESCRIPTION_KEYS), steps: firstOf(root, STEP_KEYS) };
+  return { name: firstOf(root, NAME_KEYS), description: firstOf(root, DESCRIPTION_KEYS), steps: byOrder(firstOf(root, STEP_KEYS)) };
 };
 
 const nodeSchema: z.ZodTypeAny = z.lazy(() =>
