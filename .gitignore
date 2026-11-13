@@ -26,3 +26,13 @@ dist-ssr
 
 # Electron
 release
+
+# Local tooling (not part of the app)
+graphify-out/
+supabase/.temp/
+.cursor/
+.windsurf/
+.clinerules/
+.opencode/
+.github/copilot-instructions.md
+AGENTS.md
