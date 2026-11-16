@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { courseImportRows, lessonSyncPlan, parseCourseJson } from "@/lib/courseImport";
-import { moduleLessonsDone, moduleStats, type CourseLesson, type CourseModule } from "@/hooks/useCourseModules";
+import { moduleLessonsDone, moduleParts, moduleStats, partsMinutes, type CourseLesson, type CourseModule } from "@/hooks/useCourseModules";
 import { buildCourseInsights } from "@/hooks/useCourseInsights";
 import type { Course } from "@/hooks/useCourses";
 
@@ -153,5 +153,33 @@ describe("lesson progress", () => {
   it("keeps module events when the module has no lessons", () => {
     const insight = insightsOf([mod({ completed: true, completed_at: "2026-11-05T12:00:00" })]);
     expect(insight.events).toEqual([{ day: "2026-11-05", hours: 20 / 60 }]);
+  });
+});
+
+describe("session lesson time", () => {
+  it("groups a submodule and counts only its lessons still to study", () => {
+    const parts = moduleParts(mod({
+      lessons: [
+        lesson("a", { section: "Hooks", completed: true }),
+        lesson("b", { section: "Hooks", duration_seconds: 300 }),
+        lesson("c", { duration_seconds: 120 }),
+      ],
+    }));
+    expect(parts.map((p) => [p.name, p.lessonIds, p.done, p.minutes])).toEqual([
+      ["Hooks", ["a", "b"], false, 5],
+      ["c", ["c"], false, 2],
+    ]);
+  });
+
+  it("counts a part already done in full, as a review", () => {
+    expect(moduleParts(mod({ lessons: [lesson("a", { completed: true })] }))[0].minutes).toBe(10);
+  });
+
+  it("adds exactly the minutes each checked part shows", () => {
+    const parts = moduleParts(mod({ lessons: ["a", "b", "c"].map((id) => lesson(id, { duration_seconds: 260 })) }));
+    expect(partsMinutes(parts, ["a", "b", "c"])).toBe(12);
+    expect(partsMinutes(parts, [])).toBe(0);
+    expect(partsMinutes(moduleParts(mod({ lessons: [lesson("x", { duration_seconds: null })] })), ["x"])).toBe(0);
+    expect(partsMinutes(moduleParts(mod({ lessons: [lesson("s", { duration_seconds: 20 })] })), ["s"])).toBe(1);
   });
 });

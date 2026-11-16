@@ -41,6 +41,37 @@ export function moduleLessonsDone(m: CourseModule): number {
   return m.completed ? m.lesson_count || 0 : 0;
 }
 
+export interface ModulePart {
+  name: string;
+  lessonIds: string[];
+  done: boolean;
+  /** Minutes still to study: the pending lessons, or every lesson once the part is done (a review). 0 without durations. */
+  minutes: number;
+}
+
+/** What can be picked in a module, in lesson order: each submodule as one item, each lesson outside a submodule on its own. */
+export function moduleParts(m: CourseModule): ModulePart[] {
+  const parts = new Map<string, Omit<ModulePart, "minutes"> & { all: number; pending: number }>();
+  for (const l of m.lessons ?? []) {
+    const key = l.section ? `s:${l.section}` : `l:${l.id}`;
+    const part = parts.get(key) ?? { name: l.section ?? l.name, lessonIds: [], done: true, all: 0, pending: 0 };
+    part.lessonIds.push(l.id);
+    part.done &&= l.completed;
+    part.all += l.duration_seconds ?? 0;
+    if (!l.completed) part.pending += l.duration_seconds ?? 0;
+    parts.set(key, part);
+  }
+  return [...parts.values()].map(({ all, pending, ...p }) => {
+    const seconds = p.done ? all : pending;
+    return { ...p, minutes: seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : 0 };
+  });
+}
+
+/** Minutes of the named parts: the sum of what each part shows, so the total matches the list. */
+export function partsMinutes(parts: ModulePart[], names: string[]): number {
+  return parts.filter((p) => names.includes(p.name)).reduce((a, p) => a + p.minutes, 0);
+}
+
 /** Totals used by the course progress bar: completed time over all durations. */
 export function moduleStats(modules: CourseModule[]) {
   const withDuration = modules.filter((m) => (m.duration_minutes ?? 0) > 0);

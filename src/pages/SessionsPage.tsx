@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
-import { Plus, X } from "lucide-react";
+import { ChevronRight, Plus, X } from "lucide-react";
 import { StudySession, Subject } from "@/lib/types";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -28,8 +28,11 @@ import DayGroupedList from "@/components/page/DayGroupedList";
 import { ColorDot } from "@/components/page/bits";
 import { formatDuration, minutesToTime, timeToMinutes } from "@/lib/format";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { parseNotes, serializeNotes } from "@/lib/sessionNotes";
-import { useCourseModules, CourseModule } from "@/hooks/useCourseModules";
+import { useCourseModules, CourseModule, moduleParts, partsMinutes } from "@/hooks/useCourseModules";
 import { useLearningPaths, LearningPath } from "@/hooks/useLearningPaths";
 import { buildTree, flattenNode, leafSteps, matchingStep } from "@/lib/learningPath";
 
@@ -56,24 +59,9 @@ interface SubjectAllocation {
   completeStep: boolean;
 }
 
-interface ModulePart { name: string; lessonIds: string[]; done: boolean }
-
-/** What can be picked in a module, in lesson order: each submodule as one item, each lesson outside a submodule on its own. */
-const moduleParts = (m: CourseModule): ModulePart[] => {
-  const parts = new Map<string, ModulePart>();
-  for (const l of m.lessons ?? []) {
-    const key = l.section ? `s:${l.section}` : `l:${l.id}`;
-    const part = parts.get(key) ?? { name: l.section ?? l.name, lessonIds: [], done: true };
-    part.lessonIds.push(l.id);
-    part.done &&= l.completed;
-    parts.set(key, part);
-  }
-  return [...parts.values()];
-};
-
 const blankAllocation = (): SubjectAllocation => ({
   subjectId: "",
-  minutes: 30,
+  minutes: 0,
   courseId: null,
   categoryIds: [],
   moduleId: null,
@@ -244,8 +232,8 @@ export default function SessionsPage() {
               <DialogTrigger asChild>
                 <Button size="sm" className="self-start sm:self-auto"><Plus className="w-4 h-4" />Nova sessão</Button>
               </DialogTrigger>
-              <DialogContent className="max-h-[85vh] overflow-y-auto">
-                <DialogHeader>
+              <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+                <DialogHeader className="border-b px-6 py-5">
                   <DialogTitle>{editing ? "Editar sessão" : "Nova sessão"}</DialogTitle>
                   <DialogDescription>
                     {editing
@@ -462,6 +450,7 @@ function SessionForm({
     () => allocations.reduce((acc, a) => acc + (Number(a.minutes) || 0), 0),
     [allocations],
   );
+  const computedEnd = startTime ? minutesToTime(timeToMinutes(startTime) + totalMinutes) : "";
 
   // Step of the chosen path matching the block's subject, module or studied submodules.
   const suggestStep = (a: SubjectAllocation): string | null => {
@@ -471,12 +460,19 @@ function SessionForm({
     const subjectName = subjects.find((s) => s.id === a.subjectId)?.name ?? "";
     return matchingStep(path.steps, a.subjectId, [subjectName, mod?.name ?? "", ...a.sections])?.id ?? null;
   };
+  const lessonMinutes = (a: SubjectAllocation) => {
+    const mod = a.courseId ? modulesFor(a.courseId).find((m) => m.id === a.moduleId) : undefined;
+    return mod ? partsMinutes(moduleParts(mod), a.sections) : 0;
+  };
   const updateAllocation = (idx: number, patch: Partial<SubjectAllocation>) => {
     setAllocations((prev) => prev.map((a, i) => {
       if (i !== idx) return a;
       const next = { ...a, ...patch };
       // Suggest until a step is picked; never overrides a manual choice.
       if (next.pathId && !next.stepId) next.stepId = suggestStep(next);
+      // Checked lessons post their time; typed minutes shift by the same amount. In end-time mode the times rule.
+      const shift = lessonMinutes(next) - lessonMinutes(a);
+      if (shift && !(useEndTime && prev.length === 1)) next.minutes = Math.max(0, next.minutes + shift);
       return next;
     }));
   };
@@ -541,51 +537,42 @@ function SessionForm({
   const canSave = !validationError && allocations.length > 0;
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label htmlFor="session-date">Data</Label>
-          <Input id="session-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </div>
-        <div>
-          <Label htmlFor="session-start">Início</Label>
-          <Input id="session-start" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-        </div>
-      </div>
-
-      {/* Toggle: end time mode */}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          aria-pressed={useEndTime}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${useEndTime ? "bg-primary text-primary-foreground border-primary" : "bg-muted text-muted-foreground border-border hover:bg-accent"}`}
-          onClick={() => setUseEndTime(!useEndTime)}
-        >
-          {useEndTime ? "Usando horário de término" : "Informar horário de término"}
-        </button>
-      </div>
-
-      {useEndTime && (
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="session-end">Término</Label>
-            <Input id="session-end" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+    <>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-6 py-5">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="col-span-2 space-y-2 sm:col-span-1">
+              <Label htmlFor="session-date">Data</Label>
+              <Input id="session-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="session-start">Início</Label>
+              <Input id="session-start" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="session-end">Término</Label>
+              <Input
+                id="session-end"
+                type="time"
+                value={useEndTime ? endTime : computedEnd}
+                onChange={(e) => setEndTime(e.target.value)}
+                disabled={!useEndTime}
+              />
+            </div>
           </div>
-          <div className="flex items-end">
-            <p className="text-sm text-muted-foreground pb-2">
-              Duração: <strong className="tabular-nums">{totalMinutes > 0 ? formatDuration(totalMinutes / 60) : "—"}</strong>
-            </p>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label>{useEndTime && allocations.length === 1 ? "Matéria" : "Matérias e tempo (em minutos)"}</Label>
-          {!(useEndTime && allocations.length === 1) && (
-            <span className="text-xs text-muted-foreground">
-              Total: <strong>{totalMinutes} min</strong>
-            </span>
+          {allocations.length === 1 && (
+            <div className="flex items-center gap-2">
+              <Switch
+                id="session-use-end"
+                checked={useEndTime}
+                onCheckedChange={(on) => {
+                  // Start from the current total so the minutes stay put.
+                  if (on && totalMinutes > 0) setEndTime(computedEnd);
+                  setUseEndTime(on);
+                }}
+              />
+              <Label htmlFor="session-use-end" className="font-normal text-muted-foreground">Informar horário de término</Label>
+            </div>
           )}
         </div>
 
@@ -595,118 +582,146 @@ function SessionForm({
           </p>
         )}
 
-        <div className="space-y-3">
-          {allocations.map((alloc, idx) => (
-            <div key={idx} className="border rounded-md p-3 space-y-2 bg-muted/30">
-              <div className="flex gap-2 items-start">
-                <div className="flex-1">
-                  <Select
-                    value={alloc.subjectId}
-                    onValueChange={(v) => updateAllocation(idx, { subjectId: v })}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Selecione a matéria" /></SelectTrigger>
+        <div className="space-y-4">
+          {allocations.map((alloc, idx) => {
+            const subject = subjects.find((s) => s.id === alloc.subjectId);
+            const moduleOptions = selectableModules(alloc);
+            const mod = moduleOptions.find((m) => m.id === alloc.moduleId);
+            const modSubjects = mod ? subjects.filter((s) => mod.subject_ids.includes(s.id)) : [];
+            const parts = mod ? moduleParts(mod) : [];
+            const pathOptions = selectablePaths(alloc);
+            const steps = selectableSteps(alloc);
+            const step = steps.find((st) => st.id === alloc.stepId);
+            return (
+              <section key={idx} aria-label={`Matéria ${subject?.name ?? idx + 1}`} className="rounded-lg border bg-card">
+                <div className="flex items-center gap-2 p-3 sm:p-4">
+                  <Select value={alloc.subjectId} onValueChange={(v) => updateAllocation(idx, { subjectId: v })}>
+                    <SelectTrigger aria-label="Matéria" className="min-w-0 flex-1 font-medium">
+                      <SelectValue placeholder="Selecione a matéria" />
+                    </SelectTrigger>
                     <SelectContent>
                       {subjects.map((s) => (
-                        <SelectItem
-                          key={s.id}
-                          value={s.id}
-                          disabled={usedSubjectIds.has(s.id) && alloc.subjectId !== s.id}
-                        >
+                        <SelectItem key={s.id} value={s.id} disabled={usedSubjectIds.has(s.id) && alloc.subjectId !== s.id}>
                           <span className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: s.color }} />
+                            <ColorDot color={s.color} className="h-2 w-2" />
                             {s.name}
                           </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {!(useEndTime && allocations.length === 1) && (
+                    <div className="relative w-28 shrink-0">
+                      <Input
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={alloc.minutes || ""}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => updateAllocation(idx, { minutes: Number(e.target.value.replace(/\D/g, "").slice(0, 4)) })}
+                        placeholder="0"
+                        aria-label={`Minutos de ${subject?.name ?? "estudo"}`}
+                        className="pr-11 text-right tabular-nums"
+                      />
+                      <span aria-hidden className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">min</span>
+                    </div>
+                  )}
+                  {!isEditing && allocations.length > 1 && (
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => removeAllocation(idx)} aria-label="Remover esta matéria">
+                      <X className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
-                {!(useEndTime && allocations.length === 1) && (
-                  <div className="w-28 flex items-center gap-1">
-                    <Input
-                      type="number"
-                      step="1"
-                      min="1"
-                      value={alloc.minutes}
-                      onChange={(e) => updateAllocation(idx, { minutes: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
-                      placeholder="min"
-                    />
-                    <span className="text-xs text-muted-foreground">min</span>
-                  </div>
-                )}
-                {!isEditing && allocations.length > 1 && (
-                  <Button variant="ghost" size="icon" onClick={() => removeAllocation(idx)} aria-label="Remover esta matéria">
-                    <X className="w-4 h-4" />
-                  </Button>
-                )}
-              </div>
-              <div>
-                <Select
-                  value={alloc.courseId || "__none__"}
-                  onValueChange={(v) => updateAllocation(idx, { courseId: v === "__none__" ? null : v, moduleId: null, moduleSubjectIds: [], sections: [] })}
-                >
-                  <SelectTrigger className="h-9 text-xs">
-                    <SelectValue placeholder="Curso (opcional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Sem curso</SelectItem>
-                    {courses.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        <span className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: c.color }} />
-                          {c.name}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {selectableModules(alloc).length > 0 && (() => {
-                const mod = selectableModules(alloc).find((m) => m.id === alloc.moduleId);
-                const modSubjects = mod ? subjects.filter((s) => mod.subject_ids.includes(s.id)) : [];
-                const parts = mod ? moduleParts(mod) : [];
-                return (
-                  <div className="space-y-2">
+                <div className="space-y-4 border-t p-3 sm:p-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <Select
-                      value={alloc.moduleId || ""}
-                      onValueChange={(v) => updateAllocation(idx, { moduleId: v, moduleSubjectIds: [], sections: [] })}
+                      value={alloc.courseId || "__none__"}
+                      onValueChange={(v) => updateAllocation(idx, { courseId: v === "__none__" ? null : v, moduleId: null, moduleSubjectIds: [], sections: [] })}
                     >
-                      <SelectTrigger className="h-9 text-xs">
-                        <SelectValue placeholder="Módulo (obrigatório)" />
+                      <SelectTrigger aria-label="Curso" className="h-9 text-xs">
+                        <SelectValue placeholder="Curso (opcional)" />
                       </SelectTrigger>
                       <SelectContent>
-                        {selectableModules(alloc).map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.completed ? `${m.name} (já concluído)` : m.name}
+                        <SelectItem value="__none__">Sem curso</SelectItem>
+                        {courses.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            <span className="flex items-center gap-2">
+                              <ColorDot color={c.color} className="h-2 w-2" />
+                              {c.name}
+                            </span>
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    {parts.length > 0 && (
-                      <div role="group" aria-label="Estudado neste módulo" className="space-y-1.5 rounded-md border bg-background/50 p-2">
-                        <p className="text-xs font-medium text-muted-foreground">Estudado neste módulo (marca as aulas como concluídas)</p>
-                        <div className="max-h-48 space-y-1.5 overflow-y-auto">
-                          {parts.map((p) => (
-                            <label key={p.lessonIds[0]} className="flex cursor-pointer items-center gap-2 text-xs">
-                              <Checkbox
-                                checked={alloc.sections.includes(p.name)}
-                                onCheckedChange={(c) =>
-                                  updateAllocation(idx, {
-                                    sections: c ? [...alloc.sections, p.name] : alloc.sections.filter((x) => x !== p.name),
-                                  })
-                                }
-                              />
-                              <span className="min-w-0 flex-1">{p.name}</span>
-                              {p.lessonIds.length > 1 && (
-                                <span className="shrink-0 tabular-nums text-muted-foreground">{p.lessonIds.length} aulas</span>
-                              )}
-                              {p.done && <span className="shrink-0 text-muted-foreground">concluído</span>}
-                            </label>
+                    {moduleOptions.length > 0 && (
+                      <Select
+                        value={alloc.moduleId || ""}
+                        onValueChange={(v) => updateAllocation(idx, { moduleId: v, moduleSubjectIds: [], sections: [] })}
+                      >
+                        <SelectTrigger aria-label="Módulo" className="h-9 text-xs">
+                          <SelectValue placeholder="Módulo (obrigatório)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {moduleOptions.map((m) => (
+                            <SelectItem key={m.id} value={m.id}>
+                              {m.completed ? `${m.name} (já concluído)` : m.name}
+                            </SelectItem>
                           ))}
-                        </div>
-                      </div>
+                        </SelectContent>
+                      </Select>
                     )}
-                    {modSubjects.length > 0 && (
+                  </div>
+
+                  {parts.length > 0 && (
+                    <div role="group" aria-labelledby={`session-lessons-${idx}`} className="rounded-md border bg-background/50">
+                      <div className="flex items-baseline justify-between gap-3 px-3 pt-3">
+                        <p id={`session-lessons-${idx}`} className="text-sm font-medium">Aulas estudadas</p>
+                        <span className="text-xs tabular-nums text-muted-foreground">
+                          {parts.filter((p) => alloc.sections.includes(p.name)).length} de {parts.length}
+                        </span>
+                      </div>
+                      <p className="px-3 text-xs text-muted-foreground">
+                        {useEndTime ? "Marcar conclui a aula." : "Marcar conclui a aula e soma a duração dela no tempo."}
+                      </p>
+                      <ul className="mt-2 max-h-72 space-y-0.5 overflow-y-auto px-1.5 pb-1.5">
+                        {parts.map((p) => {
+                          const checked = alloc.sections.includes(p.name);
+                          return (
+                            <li key={p.lessonIds[0]}>
+                              <label
+                                className={cn(
+                                  "flex cursor-pointer items-center gap-2.5 rounded-md px-1.5 py-1.5 text-sm transition-colors hover:bg-muted/60",
+                                  checked && "bg-primary/10 hover:bg-primary/15",
+                                )}
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(c) =>
+                                    updateAllocation(idx, {
+                                      sections: c ? [...alloc.sections, p.name] : alloc.sections.filter((x) => x !== p.name),
+                                    })
+                                  }
+                                />
+                                <span className={cn("min-w-0 flex-1", p.done && !checked && "text-muted-foreground")}>{p.name}</span>
+                                {p.lessonIds.length > 1 && (
+                                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{p.lessonIds.length} aulas</span>
+                                )}
+                                {p.done && <span className="shrink-0 text-xs text-muted-foreground">concluído</span>}
+                                {p.minutes > 0 && (
+                                  <span className={cn("w-14 shrink-0 text-right text-xs tabular-nums", checked ? "font-medium text-primary" : "text-muted-foreground")}>
+                                    {formatDuration(p.minutes / 60)}
+                                  </span>
+                                )}
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+
+                  {modSubjects.length > 0 && (
+                    <div role="group" aria-labelledby={`session-module-subjects-${idx}`} className="space-y-2">
+                      <p id={`session-module-subjects-${idx}`} className="text-xs text-muted-foreground">Matérias do módulo</p>
                       <div className="flex flex-wrap gap-x-4 gap-y-2">
                         {modSubjects.map((s) => (
                           <label key={s.id} className="flex items-center gap-1.5 text-xs">
@@ -724,109 +739,125 @@ function SessionForm({
                           </label>
                         ))}
                       </div>
-                    )}
-                  </div>
-                );
-              })()}
-              {selectablePaths(alloc).length > 0 && (() => {
-                const steps = selectableSteps(alloc);
-                const step = steps.find((st) => st.id === alloc.stepId);
-                return (
-                  <div className="space-y-2">
-                    <Select
-                      value={alloc.pathId || "__none__"}
-                      onValueChange={(v) => updateAllocation(idx, { pathId: v === "__none__" ? null : v, stepId: null, completeStep: true })}
-                    >
-                      <SelectTrigger className="h-9 text-xs" aria-label="Trilha (opcional)">
-                        <SelectValue placeholder="Trilha (opcional)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Sem trilha</SelectItem>
-                        {selectablePaths(alloc).map((p) => (
-                          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {alloc.pathId && (
-                      <>
-                        <Select value={alloc.stepId || ""} onValueChange={(v) => updateAllocation(idx, { stepId: v })}>
-                          <SelectTrigger className="h-9 text-xs" aria-label="Etapa da trilha">
-                            <SelectValue placeholder={steps.length > 0 ? "Etapa da trilha" : "Nenhuma etapa pendente"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {steps.map((st) => (
-                              <SelectItem key={st.id} value={st.id}>{st.done ? `${st.label} (já concluída)` : st.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {step && !step.done && (
-                          <label className="flex cursor-pointer items-center gap-2 text-xs">
-                            <Checkbox
-                              checked={alloc.completeStep}
-                              onCheckedChange={(c) => updateAllocation(idx, { completeStep: c === true })}
-                            />
-                            Concluir etapa ao salvar
-                          </label>
-                        )}
-                      </>
-                    )}
-                  </div>
-                );
-              })()}
-              <div>
-                <Label className="text-xs text-muted-foreground">O que foi estudado (opcional)</Label>
-                <Textarea
-                  value={alloc.studied}
-                  onChange={(e) => updateAllocation(idx, { studied: e.target.value })}
-                  rows={2}
-                  placeholder="Ex: Listas ligadas, pilhas e exercícios do capítulo 3"
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Notas (opcional)</Label>
-                <Textarea
-                  value={alloc.memo}
-                  onChange={(e) => updateAllocation(idx, { memo: e.target.value })}
-                  rows={2}
-                  placeholder="Ex: Revisar generics com keyof; dúvida sobre decorators"
-                />
-              </div>
-              {categories.length > 0 && (
-                <div className="pt-1">
-                  <Label className="text-xs text-muted-foreground">Categorias (opcional)</Label>
-                  <CategoryPicker
-                    categories={categories}
-                    selected={alloc.categoryIds}
-                    onChange={(ids) => updateAllocation(idx, { categoryIds: ids })}
-                  />
+                    </div>
+                  )}
+                  <Collapsible defaultOpen={!!(alloc.pathId || alloc.studied || alloc.memo || alloc.categoryIds.length)}>
+                    <CollapsibleTrigger className="group flex items-center gap-1.5 rounded text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      <ChevronRight className="h-4 w-4 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
+                      Mais detalhes
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3 pt-3">
+                      {pathOptions.length > 0 && (
+                        <div className="space-y-2">
+                          <Select
+                            value={alloc.pathId || "__none__"}
+                            onValueChange={(v) => updateAllocation(idx, { pathId: v === "__none__" ? null : v, stepId: null, completeStep: true })}
+                          >
+                            <SelectTrigger className="h-9 text-xs" aria-label="Trilha (opcional)">
+                              <SelectValue placeholder="Trilha (opcional)" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Sem trilha</SelectItem>
+                              {pathOptions.map((p) => (
+                                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {alloc.pathId && (
+                            <>
+                              <Select value={alloc.stepId || ""} onValueChange={(v) => updateAllocation(idx, { stepId: v })}>
+                                <SelectTrigger className="h-9 text-xs" aria-label="Etapa da trilha">
+                                  <SelectValue placeholder={steps.length > 0 ? "Etapa da trilha" : "Nenhuma etapa pendente"} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {steps.map((st) => (
+                                    <SelectItem key={st.id} value={st.id}>{st.done ? `${st.label} (já concluída)` : st.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {step && !step.done && (
+                                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                                  <Checkbox
+                                    checked={alloc.completeStep}
+                                    onCheckedChange={(c) => updateAllocation(idx, { completeStep: c === true })}
+                                  />
+                                  Concluir etapa ao salvar
+                                </label>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`session-studied-${idx}`} className="text-xs text-muted-foreground">O que foi estudado</Label>
+                        <Textarea
+                          id={`session-studied-${idx}`}
+                          value={alloc.studied}
+                          onChange={(e) => updateAllocation(idx, { studied: e.target.value })}
+                          rows={2}
+                          placeholder="Ex: Listas ligadas, pilhas e exercícios do capítulo 3"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`session-memo-${idx}`} className="text-xs text-muted-foreground">Notas</Label>
+                        <Textarea
+                          id={`session-memo-${idx}`}
+                          value={alloc.memo}
+                          onChange={(e) => updateAllocation(idx, { memo: e.target.value })}
+                          rows={2}
+                          placeholder="Ex: Revisar generics com keyof; dúvida sobre decorators"
+                        />
+                      </div>
+                      {categories.length > 0 && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs text-muted-foreground">Categorias</Label>
+                          <CategoryPicker
+                            categories={categories}
+                            selected={alloc.categoryIds}
+                            onChange={(ids) => updateAllocation(idx, { categoryIds: ids })}
+                          />
+                        </div>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
-              )}
-            </div>
-          ))}
+              </section>
+            );
+          })}
         </div>
 
         {!isEditing && !useEndTime && (
-          <Button type="button" variant="outline" size="sm" onClick={addAllocation} disabled={subjects.length === 0 || allocations.length >= subjects.length}>
-            <Plus className="w-3 h-3 mr-1" /> Adicionar matéria
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full border-dashed"
+            onClick={addAllocation}
+            disabled={subjects.length === 0 || allocations.length >= subjects.length}
+          >
+            <Plus className="w-4 h-4" />Adicionar matéria
           </Button>
         )}
-
-        {subjects.length === 0 && <p className="text-xs text-destructive">Crie uma matéria primeiro!</p>}
       </div>
 
-      {validationError && (
-        <p className="text-xs text-destructive">{validationError}</p>
-      )}
-
-      <div className="flex justify-end gap-2 pt-2">
-        <Button variant="outline" onClick={onCancel}>Cancelar</Button>
-        <Button
-          disabled={!canSave}
-          onClick={() => onSave({ date, startTime }, allocations)}
-        >
-          {initial ? "Salvar" : "Registrar"}
-        </Button>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t px-6 py-4">
+        <div className="min-w-0">
+          <p className="flex items-baseline gap-2">
+            <span className={cn("font-display text-2xl font-semibold tabular-nums", totalMinutes === 0 && "text-muted-foreground")}>
+              {formatDuration(totalMinutes / 60)}
+            </span>
+            {totalMinutes > 0 && computedEnd && (
+              <span className="text-sm tabular-nums text-muted-foreground">{startTime}–{computedEnd}</span>
+            )}
+          </p>
+          <p aria-live="polite" className="text-xs text-destructive">{validationError}</p>
+        </div>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" onClick={onCancel}>Cancelar</Button>
+          <Button disabled={!canSave} onClick={() => onSave({ date, startTime }, allocations)}>
+            {initial ? "Salvar" : "Registrar"}
+          </Button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
