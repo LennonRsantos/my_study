@@ -721,6 +721,7 @@ export type Database = {
           created_at: string
           description: string | null
           estimated_hours: number | null
+          icon: string | null
           id: string
           name: string
           plan_days: number[] | null
@@ -736,6 +737,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           estimated_hours?: number | null
+          icon?: string | null
           id?: string
           name: string
           plan_days?: number[] | null
@@ -751,6 +753,7 @@ export type Database = {
           created_at?: string
           description?: string | null
           estimated_hours?: number | null
+          icon?: string | null
           id?: string
           name?: string
           plan_days?: number[] | null
