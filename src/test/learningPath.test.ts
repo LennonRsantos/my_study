@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { LearningPathStep } from "@/hooks/useLearningPaths";
 import {
-  buildTree, effectiveStatus, flattenNode, isLocked, leafHours, leafSteps, matchingStep, parseRoadmapJson, roadmapRows, stepHours,
+  buildTree, effectiveStatus, flattenNode, isLocked, leafHours, leafSteps, matchingStep, parseRoadmapJson, parseStudyLog, roadmapRows, serializeStudyLog, stepHours,
 } from "@/lib/learningPath";
 
 const step = (id: string, patch: Partial<LearningPathStep> = {}): LearningPathStep => ({
@@ -236,5 +236,15 @@ describe("roadmapRows", () => {
     expect(rows[1].parent_id).toBe(rows[0].id);
     expect(rows[3].parent_id).toBeNull();
     expect(rows.every((r) => r.path_id === "p")).toBe(true);
+  });
+});
+
+describe("parseStudyLog / serializeStudyLog", () => {
+  it("reads empty, legacy text and JSON entries", () => {
+    expect(parseStudyLog("")).toEqual([]);
+    expect(parseStudyLog("li o capítulo 2")).toEqual([{ date: null, text: "li o capítulo 2" }]);
+    const entries = [{ date: "2026-11-16", text: "rotas" }, { date: null, text: "antigo" }];
+    expect(parseStudyLog(serializeStudyLog(entries))).toEqual(entries);
+    expect(serializeStudyLog([])).toBe("");
   });
 });

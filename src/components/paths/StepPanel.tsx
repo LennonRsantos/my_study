@@ -1,28 +1,18 @@
 import { useState } from "react";
 import { format, parseISO } from "date-fns";
-import { ArrowUp, Plus, Unlink } from "lucide-react";
+import { ArrowUp, Plus, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import RowActions from "@/components/page/RowActions";
-import { useStudy } from "@/contexts/StudyContext";
-import { toast } from "@/hooks/use-toast";
-import { formatDuration, formatHours, minutesToTime, timeToMinutes } from "@/lib/format";
-import { STEP_STATUS_LABELS, StepNode, effectiveStatus, flattenNode, isLocked } from "@/lib/learningPath";
-import { parseNotes, serializeNotes } from "@/lib/sessionNotes";
-import type { StudySession } from "@/lib/types";
-
-const LINKABLE_SESSIONS = 30;
+import { formatHours } from "@/lib/format";
+import { STEP_STATUS_LABELS, StepNode, StudyLogEntry, effectiveStatus, isLocked, parseStudyLog } from "@/lib/learningPath";
 
 interface StepPanelProps {
   node: StepNode;
-  courseId: string | null;
-  /** Subjects of the path's course, used as the default for a new session. */
-  courseSubjectIds: string[];
   moduleName: string | null;
   canMoveUp: boolean;
   onClose: () => void;
@@ -32,122 +22,32 @@ interface StepPanelProps {
   onAddTopic: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onSaveNote: (note: string) => Promise<void>;
-  /** A session was added or linked. Hours must be read again. */
-  onSessionsChanged: (added: boolean) => Promise<void>;
+  /** Saves the whole log. added is true when an entry was added, false when one was removed. */
+  onSaveLog: (entries: StudyLogEntry[], added: boolean) => Promise<boolean>;
 }
 
-const sessionLabel = (s: StudySession, subjectName?: string) =>
-  `${format(parseISO(s.date), "dd/MM/yyyy")} · ${subjectName || "Matéria removida"} · ${formatDuration(s.hours)}`;
-
-function RegisterStudy({ node, courseId, courseSubjectIds, onDone }: {
-  node: StepNode;
-  courseId: string | null;
-  courseSubjectIds: string[];
-  onDone: () => Promise<void>;
-}) {
-  const { subjects, addSession } = useStudy();
-  const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
-  const [startTime, setStartTime] = useState(() => format(new Date(), "HH:mm"));
-  const [minutes, setMinutes] = useState("30");
-  const [subjectId, setSubjectId] = useState(
-    node.subjectId ?? subjects.find((s) => courseSubjectIds.includes(s.id))?.id ?? "",
-  );
-  const [studied, setStudied] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const total = Math.floor(Number(minutes) || 0);
-  const canSave = !!date && !!startTime && !!subjectId && total > 0 && !saving;
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await addSession({
-        id: crypto.randomUUID(),
-        subjectId,
-        courseId,
-        stepId: node.id,
-        date,
-        startTime,
-        endTime: minutesToTime(timeToMinutes(startTime) + total),
-        hours: Math.round((total / 60) * 100) / 100,
-        notes: serializeNotes({ module: null, studied }),
-      });
-      setStudied("");
-      await onDone();
-      toast({ title: "Sessão registrada" });
-    } catch (e) {
-      console.error("Erro ao registrar sessão:", e);
-      toast({ title: "Não foi possível registrar a sessão", variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (subjects.length === 0) {
-    return <p className="text-sm text-muted-foreground">Crie uma matéria para registrar sessões.</p>;
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-2">
-        <div className="col-span-3 space-y-1 sm:col-span-1">
-          <Label htmlFor="step-session-date">Data</Label>
-          <Input id="step-session-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </div>
-        <div className="col-span-2 space-y-1 sm:col-span-1">
-          <Label htmlFor="step-session-start">Início</Label>
-          <Input id="step-session-start" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="step-session-minutes">Minutos</Label>
-          <Input id="step-session-minutes" type="number" min="1" step="1" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-        </div>
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="step-session-subject">Matéria</Label>
-        <Select value={subjectId} onValueChange={setSubjectId}>
-          <SelectTrigger id="step-session-subject"><SelectValue placeholder="Selecione a matéria" /></SelectTrigger>
-          <SelectContent>
-            {subjects.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="step-session-studied">O que foi estudado <span className="font-normal text-muted-foreground">(opcional)</span></Label>
-        <Textarea id="step-session-studied" rows={2} value={studied} onChange={(e) => setStudied(e.target.value)} />
-      </div>
-      <Button size="sm" onClick={save} disabled={!canSave}><Plus className="w-4 h-4" />Registrar sessão</Button>
-    </div>
-  );
-}
-
-/** Details of one roadmap box: status, note, sessions, and where to log new study. */
+/** Details of one roadmap box: status, actions and a dated log of what was studied. */
 export default function StepPanel(props: StepPanelProps) {
-  const { node, courseId, courseSubjectIds, moduleName, canMoveUp, onClose, onSaveNote, onSessionsChanged } = props;
-  const { sessions, subjects, updateSession } = useStudy();
-  const [note, setNote] = useState(node.studyNote);
+  const { node, moduleName, canMoveUp, onClose, onSaveLog } = props;
+  const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const status = effectiveStatus(node);
   const locked = isLocked(node);
-  const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name;
+  const entries = parseStudyLog(node.studyNote);
+  // Newest first; undated legacy note last
+  const shown = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => (b.entry.date ?? "").localeCompare(a.entry.date ?? ""));
 
-  const nodeIds = new Set(flattenNode(node).map((n) => n.id));
-  const linked = sessions
-    .filter((s) => s.stepId && nodeIds.has(s.stepId))
-    .sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-  const linkable = sessions
-    .filter((s) => !s.stepId)
-    .sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime))
-    .slice(0, LINKABLE_SESSIONS);
-
-  const setLink = async (session: StudySession, stepId: string | null) => {
+  const save = async (next: StudyLogEntry[], added: boolean) => {
+    setSaving(true);
     try {
-      await updateSession({ ...session, stepId });
-      await onSessionsChanged(false);
-    } catch (e) {
-      console.error("Erro ao vincular sessão:", e);
-      toast({ title: "Não foi possível atualizar a sessão", variant: "destructive" });
+      // Keep the typed text when the save failed
+      if ((await onSaveLog(next, added)) && added) setText("");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -160,7 +60,7 @@ export default function StepPanel(props: StepPanelProps) {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
               <Badge variant="secondary" className="font-normal">{STEP_STATUS_LABELS[status]}</Badge>
               {node.estimatedHours > 0 && <span>{formatHours(node.estimatedHours)} estimadas</span>}
-              <span>{formatHours(node.actualHours)} estudadas</span>
+              {node.actualHours > 0 && <span>{formatHours(node.actualHours)} estudadas</span>}
               {moduleName && <span>Módulo: {moduleName}</span>}
             </div>
           </SheetDescription>
@@ -189,75 +89,56 @@ export default function StepPanel(props: StepPanelProps) {
           <p className="text-xs text-muted-foreground">Concluído pelas horas estimadas ou pelo módulo do curso.</p>
         )}
 
-        <section className="space-y-2">
-          <Label htmlFor="step-note" className="font-sans text-sm font-semibold">Anotação</Label>
-          <Textarea
-            id="step-note"
-            rows={3}
-            placeholder="O que estudou e onde: link, livro, caderno"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-          <Button size="sm" variant="outline" disabled={note === node.studyNote} onClick={() => void onSaveNote(note)}>
-            Salvar anotação
+        <section className="space-y-3">
+          <h3 className="font-sans text-sm font-semibold">Registro de estudo</h3>
+          <div className="space-y-1">
+            <Label htmlFor="step-log-date">Data</Label>
+            <Input id="step-log-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="step-log-text">O que estudou</Label>
+            <Textarea
+              id="step-log-text"
+              rows={3}
+              placeholder="Resumo e onde: link, livro, caderno"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+            />
+          </div>
+          <Button
+            size="sm"
+            disabled={!date || !text.trim() || saving}
+            onClick={() => void save([...entries, { date, text: text.trim() }], true)}
+          >
+            <Plus className="w-4 h-4" />Registrar
           </Button>
-        </section>
 
-        <section className="space-y-2">
-          <h3 className="font-sans text-sm font-semibold">Sessões ligadas</h3>
-          {linked.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhuma sessão ligada.</p>
+          {shown.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nada registrado ainda.</p>
           ) : (
             <ul className="divide-y rounded-md border">
-              {linked.map((s) => {
-                const studied = parseNotes(s.notes).topics;
-                return (
-                  <li key={s.id} className="flex items-start gap-2 px-3 py-2 text-sm">
-                    <div className="min-w-0 flex-1">
-                      <p className="tabular-nums">{sessionLabel(s, subjectName(s.subjectId))}</p>
-                      {studied && <p className="mt-0.5 break-words text-xs text-muted-foreground">{studied}</p>}
-                    </div>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8 shrink-0"
-                      onClick={() => void setLink(s, null)}
-                      aria-label={`Desvincular sessão de ${s.date}`}
-                    >
-                      <Unlink className="w-4 h-4" />
-                    </Button>
-                  </li>
-                );
-              })}
+              {shown.map(({ entry, index }) => (
+                <li key={index} className="flex items-start gap-2 px-3 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    {entry.date && (
+                      <p className="text-xs tabular-nums text-muted-foreground">{format(parseISO(entry.date), "dd/MM/yyyy")}</p>
+                    )}
+                    <p className="whitespace-pre-wrap break-words">{entry.text}</p>
+                  </div>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                    disabled={saving}
+                    onClick={() => void save(entries.filter((_, i) => i !== index), false)}
+                    aria-label={entry.date ? `Excluir registro de ${entry.date}` : "Excluir registro"}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </li>
+              ))}
             </ul>
           )}
-          {linkable.length > 0 && (
-            <div className="space-y-1 pt-1">
-              <Label htmlFor="step-link-session">Vincular sessão existente</Label>
-              <Select
-                value=""
-                onValueChange={(id) => {
-                  const session = linkable.find((s) => s.id === id);
-                  if (session) void setLink(session, node.id);
-                }}
-              >
-                <SelectTrigger id="step-link-session"><SelectValue placeholder="Selecione a sessão" /></SelectTrigger>
-                <SelectContent>
-                  {linkable.map((s) => <SelectItem key={s.id} value={s.id}>{sessionLabel(s, subjectName(s.subjectId))}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-2">
-          <h3 className="font-sans text-sm font-semibold">Registrar estudo</h3>
-          <RegisterStudy
-            node={node}
-            courseId={courseId}
-            courseSubjectIds={courseSubjectIds}
-            onDone={() => onSessionsChanged(true)}
-          />
         </section>
       </SheetContent>
     </Sheet>

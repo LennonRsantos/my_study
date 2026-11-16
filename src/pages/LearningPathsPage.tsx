@@ -26,7 +26,11 @@ import CourseSelect from "@/components/paths/CourseSelect";
 import ImportRoadmapDialog from "@/components/paths/ImportRoadmapDialog";
 import RoadmapView from "@/components/paths/RoadmapView";
 import StepPanel from "@/components/paths/StepPanel";
-import { Roadmap, StepNode, buildTree, effectiveStatus, flattenNode, leafSteps } from "@/lib/learningPath";
+import { Roadmap, StepNode, buildTree, effectiveStatus, flattenNode, leafSteps, serializeStudyLog } from "@/lib/learningPath";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // --- Step Form (shared between Add and Edit) ---
 interface StepFormProps {
@@ -101,7 +105,7 @@ const pickedId = (value: string) => (value && value !== "none" ? value : null);
 export default function LearningPathsPage() {
   const {
     paths, loading, createPath, importPath, updatePath, deletePath,
-    addStep, updateStep, setStepsStatus, deleteStep, reorderSteps, refresh,
+    addStep, updateStep, setStepsStatus, deleteStep, reorderSteps,
   } = useLearningPaths();
   const { courses } = useCourses();
   const { modulesFor } = useCourseModules();
@@ -114,6 +118,7 @@ export default function LearningPathsPage() {
   const [editingPath, setEditingPath] = useState<LearningPath | null>(null);
   const [editingStep, setEditingStep] = useState<StepNode | null>(null);
   const [panelStepId, setPanelStepId] = useState<string | null>(null);
+  const [pendingToggle, setPendingToggle] = useState<{ node: StepNode; completed: boolean } | null>(null);
 
   // Form state
   const [pathName, setPathName] = useState("");
@@ -193,6 +198,12 @@ export default function LearningPathsPage() {
   const setNodeCompleted = async (node: StepNode, completed: boolean) => {
     const ids = flattenNode(node).filter(n => !n.autoDone).map(n => n.id);
     if (ids.length > 0) await setStepsStatus(ids, completed ? "completed" : "not_started");
+  };
+
+  /** A step with topics asks first, since checking it also checks every topic. */
+  const requestNodeCompleted = (node: StepNode, completed: boolean) => {
+    if (node.children.length > 0) setPendingToggle({ node, completed });
+    else void setNodeCompleted(node, completed);
   };
 
   const handleDeleteStep = async (node: StepNode) => {
@@ -310,31 +321,58 @@ export default function LearningPathsPage() {
               action={<Button size="sm" onClick={() => setShowAddStep(true)}><Plus className="w-4 h-4" />Nova etapa</Button>}
             />
           ) : (
-            <RoadmapView tree={tree} onOpen={(n) => setPanelStepId(n.id)} onToggle={setNodeCompleted} />
+            <RoadmapView tree={tree} onOpen={(n) => setPanelStepId(n.id)} onToggle={requestNodeCompleted} />
           )}
 
           {panelNode && (
             <StepPanel
               key={panelNode.id}
               node={panelNode}
-              courseId={selectedPath.courseId}
-              courseSubjectIds={course?.subjectIds ?? []}
               moduleName={modules.find(m => m.id === panelNode.moduleId)?.name ?? null}
               canMoveUp={siblingsOf(panelNode)[0]?.id !== panelNode.id}
               onClose={() => setPanelStepId(null)}
               onStart={() => updateStep(panelNode.id, { status: "in_progress" })}
-              onSetCompleted={(completed) => setNodeCompleted(panelNode, completed)}
+              onSetCompleted={(completed) => requestNodeCompleted(panelNode, completed)}
               onMoveUp={() => moveStepUp(panelNode)}
               onAddTopic={() => { setAddParent(panelNode); setPanelStepId(null); setShowAddStep(true); }}
               onEdit={() => openEditStep(panelNode)}
               onDelete={() => handleDeleteStep(panelNode)}
-              onSaveNote={async (note) => { await updateStep(panelNode.id, { studyNote: note }); toast({ title: "Anotação salva" }); }}
-              onSessionsChanged={async (added) => {
-                if (added && panelNode.status === "not_started") await updateStep(panelNode.id, { status: "in_progress" });
-                else await refresh();
+              onSaveLog={async (entries, added) => {
+                const ok = await updateStep(panelNode.id, {
+                  studyNote: serializeStudyLog(entries),
+                  // Logging study starts the step
+                  ...(added && panelNode.status === "not_started" ? { status: "in_progress" as const } : {}),
+                });
+                if (ok) toast({ title: added ? "Registro salvo" : "Registro excluído" });
+                return ok;
               }}
             />
           )}
+
+          <AlertDialog open={!!pendingToggle} onOpenChange={(o) => { if (!o) setPendingToggle(null); }}>
+            <AlertDialogContent className="max-w-sm">
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {pendingToggle?.completed ? "Concluir" : "Reabrir"} {pendingToggle?.node.name}?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {pendingToggle && (() => {
+                    const n = flattenNode(pendingToggle.node).length - 1;
+                    const what = n === 1 ? "O subtópico também será marcado" : `Os ${n} subtópicos também serão marcados`;
+                    return `${what} como ${pendingToggle.completed ? "concluído" : "não iniciado"}${n === 1 ? "" : "s"}.`;
+                  })()}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => { if (pendingToggle) void setNodeCompleted(pendingToggle.node, pendingToggle.completed); }}
+                >
+                  {pendingToggle?.completed ? "Concluir" : "Reabrir"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </AppLayout>
     );
