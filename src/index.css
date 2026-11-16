@@ -149,3 +149,13 @@
     @apply bg-card/80 backdrop-blur-sm border border-border/50 shadow-sm;
   }
 }
+
+/* Syntax colors for highlight.js output (study log code blocks).
+   Outside @layer on purpose: hljs-* classes appear only at runtime, so Tailwind would purge them. */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-doctag { @apply text-purple-600 dark:text-purple-400; }
+.hljs-string, .hljs-regexp { @apply text-green-700 dark:text-green-400; }
+.hljs-tag, .hljs-name, .hljs-selector-class, .hljs-selector-id { @apply text-blue-600 dark:text-sky-400; }
+.hljs-attr, .hljs-attribute, .hljs-property, .hljs-variable { @apply text-orange-600 dark:text-orange-300; }
+.hljs-number, .hljs-literal, .hljs-meta { @apply text-amber-600 dark:text-amber-300; }
+.hljs-title, .hljs-function, .hljs-type { @apply text-cyan-700 dark:text-cyan-300; }
+.hljs-comment, .hljs-quote { @apply italic text-muted-foreground; }

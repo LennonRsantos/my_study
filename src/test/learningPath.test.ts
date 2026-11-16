@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { LearningPathStep } from "@/hooks/useLearningPaths";
 import {
-  buildTree, effectiveStatus, flattenNode, isLocked, leafHours, leafSteps, matchingStep, parseRoadmapJson, parseStudyLog, roadmapRows, serializeStudyLog, stepHours,
+  buildTree, effectiveStatus, flattenNode, isLocked, leafHours, leafSteps, matchingStep, nextPendingStep, parseRoadmapJson, parseStudyLog, roadmapRows, serializeStudyLog, stepHours,
 } from "@/lib/learningPath";
 
 const step = (id: string, patch: Partial<LearningPathStep> = {}): LearningPathStep => ({
@@ -25,6 +25,30 @@ describe("buildTree / leafSteps", () => {
   it("keeps only steps without children", () => {
     const leaves = leafSteps([step("a"), step("a1", { parentId: "a" }), step("b")]);
     expect(leaves.map((s) => s.id)).toEqual(["a1", "b"]);
+  });
+});
+
+describe("nextPendingStep", () => {
+  const tree = buildTree([
+    step("a", { position: 0 }),
+    step("b", { position: 1 }),
+    step("b1", { parentId: "b", position: 0 }),
+    step("b2", { parentId: "b", position: 1 }),
+    step("c", { position: 2, status: "completed" }),
+    step("d", { position: 3 }),
+  ]);
+  const [a, b, , d] = tree;
+  const ids = (n: ReturnType<typeof nextPendingStep>) => n?.id;
+
+  it("picks the next pending leaf, skipping completed ones and the node's own topics", () => {
+    expect(ids(nextPendingStep(tree, a))).toBe("b1");
+    expect(ids(nextPendingStep(tree, b))).toBe("d");
+    expect(ids(nextPendingStep(tree, b.children[0]))).toBe("b2");
+  });
+
+  it("wraps to the start and returns undefined when nothing is pending", () => {
+    expect(ids(nextPendingStep(tree, d))).toBe("a");
+    expect(nextPendingStep(buildTree([step("x")]), buildTree([step("x")])[0])).toBeUndefined();
   });
 });
 
@@ -212,11 +236,17 @@ describe("parseRoadmapJson", () => {
     expect(parseRoadmapJson(JSON.stringify({ name: "SQL", steps: [] })).ok).toBe(false);
   });
 
-  it("rejects a fourth level", () => {
-    const deep = { name: "a", topics: [{ name: "b", topics: [{ name: "c", topics: [{ name: "d" }] }] }] };
-    expect(parseRoadmapJson(JSON.stringify({ name: "SQL", steps: [deep] }))).toEqual({
+  const chain = (depth: number): { name: string; topics: unknown[] } =>
+    ({ name: `n${depth}`, topics: depth > 1 ? [chain(depth - 1)] : [] });
+
+  it("accepts five levels", () => {
+    expect(parseRoadmapJson(JSON.stringify({ name: "SQL", steps: [chain(5)] })).ok).toBe(true);
+  });
+
+  it("rejects a sixth level", () => {
+    expect(parseRoadmapJson(JSON.stringify({ name: "SQL", steps: [chain(6)] }))).toEqual({
       ok: false,
-      error: "Use no máximo 3 níveis de tópicos.",
+      error: "Use no máximo 5 níveis de tópicos.",
     });
   });
 
@@ -246,5 +276,12 @@ describe("parseStudyLog / serializeStudyLog", () => {
     const entries = [{ date: "2026-11-16", text: "rotas" }, { date: null, text: "antigo" }];
     expect(parseStudyLog(serializeStudyLog(entries))).toEqual(entries);
     expect(serializeStudyLog([])).toBe("");
+  });
+
+  it("keeps a code example and drops empty or invalid ones", () => {
+    const withCode = [{ date: "2026-11-16", text: "", code: "<p>\n  oi\n</p>" }];
+    expect(parseStudyLog(serializeStudyLog(withCode))).toEqual(withCode);
+    const bad = JSON.stringify([{ date: "2026-11-16", text: "a", code: "  " }, { date: null, text: "b", code: 3 }]);
+    expect(parseStudyLog(bad)).toEqual([{ date: "2026-11-16", text: "a" }, { date: null, text: "b" }]);
   });
 });

@@ -26,7 +26,7 @@ import CourseSelect from "@/components/paths/CourseSelect";
 import ImportRoadmapDialog from "@/components/paths/ImportRoadmapDialog";
 import RoadmapView from "@/components/paths/RoadmapView";
 import StepPanel from "@/components/paths/StepPanel";
-import { Roadmap, StepNode, buildTree, effectiveStatus, flattenNode, leafSteps, serializeStudyLog } from "@/lib/learningPath";
+import { Roadmap, StepNode, buildTree, effectiveStatus, flattenNode, leafSteps, nextPendingStep, serializeStudyLog } from "@/lib/learningPath";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -198,6 +198,8 @@ export default function LearningPathsPage() {
   const setNodeCompleted = async (node: StepNode, completed: boolean) => {
     const ids = flattenNode(node).filter(n => !n.autoDone).map(n => n.id);
     if (ids.length > 0) await setStepsStatus(ids, completed ? "completed" : "not_started");
+    // Completing the open step moves the panel on to what comes next
+    if (completed && panelStepId === node.id) setPanelStepId(nextPendingStep(tree, node)?.id ?? null);
   };
 
   /** A step with topics asks first, since checking it also checks every topic. */
