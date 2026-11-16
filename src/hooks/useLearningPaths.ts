@@ -221,8 +221,9 @@ export function useLearningPaths() {
       dbUpdates.completed_at = updates.status === "completed" ? new Date().toISOString() : null;
     }
     const { error } = await supabase.from("learning_path_steps").update(dbUpdates).eq("id", stepId);
-    if (error) { toast({ title: "Erro ao atualizar etapa", variant: "destructive" }); return; }
+    if (error) { toast({ title: "Erro ao atualizar etapa", variant: "destructive" }); return false; }
     await refresh();
+    return true;
   };
 
   const setStepsStatus = async (stepIds: string[], status: StepStatus) => {

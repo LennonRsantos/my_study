@@ -59,7 +59,33 @@ export function isLocked(node: StepNode): boolean {
   return nodeLeaves(node).every((n) => n.autoDone);
 }
 
-const normName = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+/** One "what I studied and when" entry of a step. */
+export interface StudyLogEntry {
+  /** yyyy-MM-dd; null for a note written before the log existed. */
+  date: string | null;
+  text: string;
+}
+
+/** Reads the step's study_note: a JSON list of entries, or legacy free text kept as one undated entry. */
+export function parseStudyLog(note: string): StudyLogEntry[] {
+  if (!note.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(note);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((e): e is StudyLogEntry => !!e && typeof e.text === "string")
+        .map((e) => ({ date: typeof e.date === "string" ? e.date : null, text: e.text }));
+    }
+  } catch {
+    // plain text from the old single note
+  }
+  return [{ date: null, text: note }];
+}
+
+export const serializeStudyLog = (entries: StudyLogEntry[]): string =>
+  entries.length === 0 ? "" : JSON.stringify(entries);
+
+const normName =(s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
 
 /** Pending leaf step a session is about: same name (case/accent-insensitive) first, else same subject. */
 export function matchingStep<T extends LearningPathStep>(steps: T[], subjectId: string, names: string[]): T | undefined {
