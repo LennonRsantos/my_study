@@ -27,6 +27,8 @@ export interface LearningPath {
   id: string;
   name: string;
   description: string;
+  /** Emoji or devicon name; null when none was picked. */
+  icon: string | null;
   estimatedHours: number;
   courseId: string | null;
   steps: LearningPathStep[];
@@ -108,6 +110,7 @@ export function useLearningPaths() {
         id: p.id,
         name: p.name,
         description: p.description || "",
+        icon: p.icon ?? null,
         estimatedHours: Number(p.estimated_hours),
         courseId: p.course_id ?? null,
         createdAt: p.created_at,
@@ -142,12 +145,12 @@ export function useLearningPaths() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const createPath = async (name: string, description: string, courseId: string | null = null) => {
+  const createPath = async (name: string, description: string, courseId: string | null = null, icon: string | null = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
     const { data, error } = await supabase
       .from("learning_paths")
-      .insert({ name, description, user_id: user.id, course_id: courseId })
+      .insert({ name, description, icon, user_id: user.id, course_id: courseId })
       .select()
       .single();
     if (error) { toast({ title: "Erro ao criar trilha", variant: "destructive" }); return null; }
@@ -155,8 +158,8 @@ export function useLearningPaths() {
     return data.id;
   };
 
-  const updatePath = async (id: string, name: string, description: string, courseId: string | null) => {
-    const { error } = await supabase.from("learning_paths").update({ name, description, course_id: courseId, updated_at: new Date().toISOString() }).eq("id", id);
+  const updatePath = async (id: string, name: string, description: string, courseId: string | null, icon: string | null) => {
+    const { error } = await supabase.from("learning_paths").update({ name, description, icon, course_id: courseId, updated_at: new Date().toISOString() }).eq("id", id);
     if (error) { toast({ title: "Erro ao atualizar trilha", variant: "destructive" }); return; }
     // Modules belong to the old course
     if (paths.find(p => p.id === id)?.courseId !== courseId) {

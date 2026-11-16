@@ -124,6 +124,7 @@ export default function LearningPathsPage() {
   const [pathName, setPathName] = useState("");
   const [pathDesc, setPathDesc] = useState("");
   const [pathCourseId, setPathCourseId] = useState<string | null>(null);
+  const [pathIcon, setPathIcon] = useState("");
   const [stepName, setStepName] = useState("");
   const [stepIcon, setStepIcon] = useState<string>("");
   const [stepHours, setStepHours] = useState("");
@@ -135,7 +136,7 @@ export default function LearningPathsPage() {
   const panelNode = tree.flatMap(flattenNode).find(n => n.id === panelStepId);
 
   const resetPathForm = () => {
-    setPathName(""); setPathDesc(""); setPathCourseId(null);
+    setPathName(""); setPathDesc(""); setPathCourseId(null); setPathIcon("");
   };
 
   const resetStepForm = () => {
@@ -144,14 +145,14 @@ export default function LearningPathsPage() {
 
   const handleCreatePath = async () => {
     if (!pathName.trim()) return;
-    await createPath(pathName.trim(), pathDesc.trim(), pathCourseId);
+    await createPath(pathName.trim(), pathDesc.trim(), pathCourseId, pathIcon || null);
     resetPathForm(); setShowCreatePath(false);
     toast({ title: "Trilha criada" });
   };
 
   const handleEditPath = async () => {
     if (!editingPath || !pathName.trim()) return;
-    await updatePath(editingPath.id, pathName.trim(), pathDesc.trim(), pathCourseId);
+    await updatePath(editingPath.id, pathName.trim(), pathDesc.trim(), pathCourseId, pathIcon || null);
     setEditingPath(null); resetPathForm();
     toast({ title: "Trilha salva" });
   };
@@ -269,7 +270,9 @@ export default function LearningPathsPage() {
       <AppLayout>
         <PageHeader
           back={{ onClick: () => setSelectedPathId(null), label: "Trilhas" }}
-          title={selectedPath.name}
+          title={selectedPath.icon ? (
+            <span className="flex items-center gap-3"><BrandIcon icon={selectedPath.icon} size={32} />{selectedPath.name}</span>
+          ) : selectedPath.name}
           description={selectedPath.description || undefined}
           actions={<Button size="sm" onClick={() => setShowAddStep(true)}><Plus className="w-4 h-4" />Nova etapa</Button>}
         />
@@ -399,7 +402,7 @@ export default function LearningPathsPage() {
       <Dialog open={showCreatePath} onOpenChange={(o) => { setShowCreatePath(o); if (!o) resetPathForm(); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Nova trilha</DialogTitle></DialogHeader>
-          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
+          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} icon={pathIcon} setIcon={setPathIcon} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
           <DialogFooter>
             <Button onClick={handleCreatePath} disabled={!pathName.trim()}>Criar trilha</Button>
           </DialogFooter>
@@ -410,7 +413,7 @@ export default function LearningPathsPage() {
       <Dialog open={!!editingPath} onOpenChange={(o) => { if (!o) { setEditingPath(null); resetPathForm(); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Editar trilha</DialogTitle></DialogHeader>
-          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
+          <PathFields name={pathName} setName={setPathName} desc={pathDesc} setDesc={setPathDesc} icon={pathIcon} setIcon={setPathIcon} courses={courses} courseId={pathCourseId} setCourseId={setPathCourseId} />
           <DialogFooter>
             <Button onClick={handleEditPath} disabled={!pathName.trim()}>Salvar</Button>
           </DialogFooter>
@@ -440,7 +443,8 @@ export default function LearningPathsPage() {
                 className="relative flex flex-col rounded-xl border bg-card p-5 transition-colors hover:border-foreground/20 focus-within:ring-2 focus-within:ring-ring"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  {path.icon && <span className="shrink-0"><BrandIcon icon={path.icon} size={28} /></span>}
+                  <div className="min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => setSelectedPathId(path.id)}
@@ -460,7 +464,7 @@ export default function LearningPathsPage() {
                     <RowActions
                       itemLabel={`trilha ${path.name}`}
                       deleteWarning="Todas as etapas serão excluídas junto."
-                      onEdit={() => { setEditingPath(path); setPathName(path.name); setPathDesc(path.description); setPathCourseId(path.courseId); }}
+                      onEdit={() => { setEditingPath(path); setPathName(path.name); setPathDesc(path.description); setPathCourseId(path.courseId); setPathIcon(path.icon ?? ""); }}
                       onDelete={() => deletePath(path.id)}
                     />
                   </div>
@@ -503,11 +507,13 @@ export default function LearningPathsPage() {
   );
 }
 
-function PathFields({ name, setName, desc, setDesc, courses, courseId, setCourseId }: {
+function PathFields({ name, setName, desc, setDesc, icon, setIcon, courses, courseId, setCourseId }: {
   name: string;
   setName: (v: string) => void;
   desc: string;
   setDesc: (v: string) => void;
+  icon: string;
+  setIcon: (v: string) => void;
   courses: Course[];
   courseId: string | null;
   setCourseId: (v: string | null) => void;
@@ -517,6 +523,10 @@ function PathFields({ name, setName, desc, setDesc, courses, courseId, setCourse
       <div className="space-y-2">
         <Label htmlFor="path-name">Nome</Label>
         <Input id="path-name" placeholder="Ex.: Front-end" value={name} onChange={e => setName(e.target.value)} />
+      </div>
+      <div className="space-y-2">
+        <Label>Ícone <span className="font-normal text-muted-foreground">(opcional)</span></Label>
+        <SearchableIconPicker value={icon} onValueChange={setIcon} />
       </div>
       <div className="space-y-2">
         <Label htmlFor="path-desc">Descrição <span className="font-normal text-muted-foreground">(opcional)</span></Label>
