@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { format, parseISO } from "date-fns";
+import hljs from "highlight.js/lib/common";
 import { ArrowUp, Plus, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ export default function StepPanel(props: StepPanelProps) {
   const { node, moduleName, canMoveUp, onClose, onSaveLog } = props;
   const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [text, setText] = useState("");
+  const [code, setCode] = useState("");
   const [saving, setSaving] = useState(false);
 
   const status = effectiveStatus(node);
@@ -45,7 +47,10 @@ export default function StepPanel(props: StepPanelProps) {
     setSaving(true);
     try {
       // Keep the typed text when the save failed
-      if ((await onSaveLog(next, added)) && added) setText("");
+      if ((await onSaveLog(next, added)) && added) {
+        setText("");
+        setCode("");
+      }
     } finally {
       setSaving(false);
     }
@@ -105,10 +110,22 @@ export default function StepPanel(props: StepPanelProps) {
               onChange={(e) => setText(e.target.value)}
             />
           </div>
+          <div className="space-y-1">
+            <Label htmlFor="step-log-code">Exemplo de código (opcional)</Label>
+            <Textarea
+              id="step-log-code"
+              rows={4}
+              spellCheck={false}
+              className="font-mono text-xs"
+              placeholder="<p>Olá</p>"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </div>
           <Button
             size="sm"
-            disabled={!date || !text.trim() || saving}
-            onClick={() => void save([...entries, { date, text: text.trim() }], true)}
+            disabled={!date || (!text.trim() && !code.trim()) || saving}
+            onClick={() => void save([...entries, { date, text: text.trim(), ...(code.trim() ? { code } : {}) }], true)}
           >
             <Plus className="w-4 h-4" />Registrar
           </Button>
@@ -123,7 +140,13 @@ export default function StepPanel(props: StepPanelProps) {
                     {entry.date && (
                       <p className="text-xs tabular-nums text-muted-foreground">{format(parseISO(entry.date), "dd/MM/yyyy")}</p>
                     )}
-                    <p className="whitespace-pre-wrap break-words">{entry.text}</p>
+                    {entry.text && <p className="whitespace-pre-wrap break-words">{entry.text}</p>}
+                    {entry.code && (
+                      <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted p-2 font-mono text-xs">
+                        {/* highlightAuto escapes the code; output is only hljs spans */}
+                        <code dangerouslySetInnerHTML={{ __html: hljs.highlightAuto(entry.code).value }} />
+                      </pre>
+                    )}
                   </div>
                   <Button
                     size="icon"

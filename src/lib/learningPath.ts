@@ -46,6 +46,15 @@ export function nodeLeaves(node: StepNode): StepNode[] {
   return node.children.length === 0 ? [node] : node.children.flatMap(nodeLeaves);
 }
 
+/** First pending leaf after the node in roadmap order, wrapping to the start; skips the node's own topics. */
+export function nextPendingStep(tree: StepNode[], node: StepNode): StepNode | undefined {
+  const leaves = tree.flatMap(nodeLeaves);
+  const own = new Set(nodeLeaves(node).map((n) => n.id));
+  const last = leaves.reduce((at, n, i) => (own.has(n.id) ? i : at), -1);
+  const pending = (n: StepNode) => !own.has(n.id) && n.status !== "completed";
+  return leaves.slice(last + 1).find(pending) ?? leaves.slice(0, last).find(pending);
+}
+
 /** A parent's status comes from its topics. Its own column only says the parent itself was started. */
 export function effectiveStatus(node: StepNode): StepStatus {
   if (node.children.length === 0) return node.status;
@@ -64,6 +73,8 @@ export interface StudyLogEntry {
   /** yyyy-MM-dd; null for a note written before the log existed. */
   date: string | null;
   text: string;
+  /** Optional code example, shown as a monospace block. */
+  code?: string;
 }
 
 /** Reads the step's study_note: a JSON list of entries, or legacy free text kept as one undated entry. */
@@ -74,7 +85,11 @@ export function parseStudyLog(note: string): StudyLogEntry[] {
     if (Array.isArray(parsed)) {
       return parsed
         .filter((e): e is StudyLogEntry => !!e && typeof e.text === "string")
-        .map((e) => ({ date: typeof e.date === "string" ? e.date : null, text: e.text }));
+        .map((e) => ({
+          date: typeof e.date === "string" ? e.date : null,
+          text: e.text,
+          ...(typeof e.code === "string" && e.code.trim() ? { code: e.code } : {}),
+        }));
     }
   } catch {
     // plain text from the old single note
@@ -131,7 +146,7 @@ export interface Roadmap {
   steps: RoadmapNode[];
 }
 
-const MAX_DEPTH = 3;
+const MAX_DEPTH = 5;
 const MAX_NODES = 500;
 
 const nameSchema = z.string().trim().min(1).max(120);
@@ -237,6 +252,6 @@ export const ROADMAP_PROMPT = `Leia o roadmap de estudos da imagem anexada e dev
 Regras:
 - "steps" são os nós principais, na ordem em que a linha do roadmap os percorre, de cima para baixo.
 - "topics" são as caixas ligadas a cada nó principal.
-- Caixas agrupadas sob um subtópico vão em "topics" desse subtópico. Use no máximo 3 níveis.
+- Caixas agrupadas sob um subtópico vão em "topics" desse subtópico. Use no máximo ${MAX_DEPTH} níveis.
 - Copie os nomes exatamente como aparecem, sem traduzir.
 - Ignore anúncios, botões, links, legendas e roadmaps relacionados.`;
